@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { favorites, InsertPlace, InsertUser, places, reviews, User, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,4 +89,45 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+export async function listPlaces(status: "approved" | "pending" | "rejected" = "approved") {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(places).where(eq(places.status, status));
+}
+
+export async function getPlaceById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(places).where(and(eq(places.id, id), eq(places.status, "approved"))).limit(1);
+  return result[0];
+}
+
+export async function createPlace(input: InsertPlace) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.insert(places).values(input);
+  return Number(result[0].insertId);
+}
+
+export async function getFavoritePlaceIds(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ placeId: favorites.placeId }).from(favorites).where(eq(favorites.userId, userId));
+  return rows.map((row) => row.placeId);
+}
+
+export async function setFavorite(userId: number, placeId: number, enabled: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  if (enabled) {
+    await db.insert(favorites).values({ userId, placeId }).onDuplicateKeyUpdate({ set: { userId } });
+  } else {
+    await db.delete(favorites).where(and(eq(favorites.userId, userId), eq(favorites.placeId, placeId)));
+  }
+}
+
+export async function addReview(input: { placeId: number; userId: number; rating: number; comment?: string | null }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.insert(reviews).values({ ...input, status: "visible" });
+}

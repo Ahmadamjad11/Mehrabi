@@ -28,8 +28,8 @@ const schemeFromBundleId = `manus${timestamp}`;
 
 const env = {
   // App branding - update these values directly (do not use env vars)
-  appName: "وين أصلي؟ — تطبيق جوّال",
-  appSlug: "wenausalli",
+  appName: "مصلاي",
+  appSlug: "maslay",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "",
@@ -77,7 +77,7 @@ const config: ExpoConfig = {
   },
   android: {
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
+      backgroundColor: "#102D4A",
       foregroundImage: "./assets/images/android-icon-foreground.png",
       backgroundImage: "./assets/images/android-icon-background.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
@@ -108,6 +108,12 @@ const config: ExpoConfig = {
     "expo-asset",
     "expo-router",
     [
+      "expo-location",
+      {
+        locationWhenInUsePermission: "نستخدم موقعك لعرض أماكن الصلاة القريبة منك.",
+      },
+    ],
+    [
       "expo-audio",
       {
         microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
@@ -126,9 +132,9 @@ const config: ExpoConfig = {
         image: "./assets/images/splash-icon.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
+        backgroundColor: "#F7F9FA",
         dark: {
-          backgroundColor: "#000000",
+          backgroundColor: "#102D4A",
         },
       },
     ],

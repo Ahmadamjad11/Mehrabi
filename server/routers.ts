@@ -1,33 +1,69 @@
-import {
-  getSessionCookieName,
-  getSessionCookieOptions,
-} from "./_core/cookies";
+import { z } from "zod";
+import { getSessionCookieName, getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import {
+  addReview,
+  createPlace,
+  getFavoritePlaceIds,
+  getPlaceById,
+  listPlaces,
+  setFavorite,
+} from "./db";
+
+const placeInput = z.object({
+  name: z.string().min(2).max(255),
+  nameEn: z.string().max(255).optional(),
+  type: z.enum(["mosque", "musalla", "station", "mall"]),
+  description: z.string().max(2000).optional(),
+  address: z.string().max(500).optional(),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  hours: z.string().max(255).optional(),
+  hasAblution: z.boolean().default(false),
+  hasParking: z.boolean().default(false),
+  photos: z.string().optional(),
+});
 
 export const appRouter = router({
-  // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
     me: publicProcedure.query((opts) => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(getSessionCookieName(ctx.req), {
-        ...cookieOptions,
-        maxAge: -1,
-      });
-      return {
-        success: true,
-      } as const;
+      ctx.res.clearCookie(getSessionCookieName(ctx.req), { ...cookieOptions, maxAge: -1 });
+      return { success: true } as const;
     }),
   }),
-
-  // TODO: add feature routers here, e.g.
-  // todo: router({
-  //   list: protectedProcedure.query(({ ctx }) =>
-  //     db.getUserTodos(ctx.user.id)
-  //   ),
-  // }),
+  places: router({
+    list: publicProcedure
+      .input(z.object({ search: z.string().optional(), openNow: z.boolean().optional(), hasAblution: z.boolean().optional(), hasParking: z.boolean().optional() }).optional())
+      .query(async ({ input }) => {
+        const rows = await listPlaces();
+        const search = input?.search?.trim().toLowerCase();
+        return rows.filter((place) => {
+          if (search && !`${place.name} ${place.nameEn ?? ""} ${place.address ?? ""}`.toLowerCase().includes(search)) return false;
+          if (input?.openNow && place.status !== "approved") return false;
+          if (input?.hasAblution && !place.hasAblution) return false;
+          if (input?.hasParking && !place.hasParking) return false;
+          return true;
+        });
+      }),
+    byId: publicProcedure.input(z.object({ id: z.number().int().positive() })).query(({ input }) => getPlaceById(input.id)),
+    submit: protectedProcedure.input(placeInput).mutation(({ ctx, input }) =>
+      createPlace({ ...input, status: "pending", createdBy: ctx.user.id }),
+    ),
+    favoriteIds: protectedProcedure.query(({ ctx }) => getFavoritePlaceIds(ctx.user.id)),
+    setFavorite: protectedProcedure
+      .input(z.object({ placeId: z.number().int().positive(), enabled: z.boolean() }))
+      .mutation(({ ctx, input }) => setFavorite(ctx.user.id, input.placeId, input.enabled)),
+    review: protectedProcedure
+      .input(z.object({ placeId: z.number().int().positive(), rating: z.number().int().min(1).max(5), comment: z.string().max(1000).optional() }))
+      .mutation(({ ctx, input }) => addReview({ ...input, userId: ctx.user.id })),
+  }),
+  admin: router({
+    pendingPlaces: adminProcedure.query(() => listPlaces("pending")),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

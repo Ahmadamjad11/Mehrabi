@@ -1,17 +1,17 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import {
+  boolean,
+  double,
+  int,
+  mysqlEnum,
+  mysqlTable,
+  primaryKey,
+  text,
+  timestamp,
+  varchar,
+} from "drizzle-orm/mysql-core";
 
-/**
- * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
- */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -22,7 +22,53 @@ export const users = mysqlTable("users", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export const places = mysqlTable("places", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  nameEn: varchar("nameEn", { length: 255 }),
+  type: mysqlEnum("type", ["mosque", "musalla", "station", "mall"]).default("mosque").notNull(),
+  description: text("description"),
+  address: varchar("address", { length: 500 }),
+  latitude: double("latitude").notNull(),
+  longitude: double("longitude").notNull(),
+  hours: varchar("hours", { length: 255 }).default("مفتوح طوال اليوم"),
+  hasAblution: boolean("hasAblution").default(false).notNull(),
+  hasParking: boolean("hasParking").default(false).notNull(),
+  photos: text("photos"),
+  status: mysqlEnum("status", ["pending", "approved", "rejected"]).default("pending").notNull(),
+  createdBy: int("createdBy"),
+  reviewedBy: int("reviewedBy"),
+  reviewedAt: timestamp("reviewedAt"),
+  averageRating: double("averageRating").default(0).notNull(),
+  ratingsCount: int("ratingsCount").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const favorites = mysqlTable(
+  "favorites",
+  {
+    userId: int("userId").notNull(),
+    placeId: int("placeId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({ pk: primaryKey({ columns: [table.userId, table.placeId] }) }),
+);
+
+export const reviews = mysqlTable("reviews", {
+  id: int("id").autoincrement().primaryKey(),
+  placeId: int("placeId").notNull(),
+  userId: int("userId").notNull(),
+  rating: int("rating").notNull(),
+  comment: text("comment"),
+  status: mysqlEnum("status", ["visible", "reported", "hidden"]).default("visible").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
-
-// TODO: Add your tables here
+export type Place = typeof places.$inferSelect;
+export type InsertPlace = typeof places.$inferInsert;
+export type Review = typeof reviews.$inferSelect;
+export type Favorite = typeof favorites.$inferSelect;
