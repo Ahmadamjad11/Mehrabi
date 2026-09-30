@@ -131,3 +131,9 @@ export async function addReview(input: { placeId: number; userId: number; rating
   if (!db) throw new Error("Database is not available");
   await db.insert(reviews).values({ ...input, status: "visible" });
 }
+
+export async function updatePlaceStatus(placeId: number, status: "approved" | "rejected", reviewedBy: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(places).set({ status, reviewedBy, reviewedAt: new Date() }).where(eq(places.id, placeId));
+}
