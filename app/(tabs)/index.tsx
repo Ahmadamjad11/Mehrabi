@@ -1,7 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
 import * as Location from "expo-location";
-import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -141,12 +140,15 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    Magnetometer.setUpdateInterval(500);
-    const subscription = Magnetometer.addListener(({ x, y }) => {
-      const heading = (Math.atan2(y, x) * 180) / Math.PI;
-      setCompassHeading((heading + 360) % 360);
+    let subscription: { remove: () => void } | null = null;
+    Location.watchHeadingAsync((heading) => {
+      // trueHeading is corrected for magnetic declination when available.
+      const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+      if (Number.isFinite(value)) setCompassHeading((value + 360) % 360);
+    }).then((next) => { subscription = next; }).catch(() => {
+      // Some devices do not expose a compass; the UI will keep showing the fixed true bearing.
     });
-    return () => subscription.remove();
+    return () => subscription?.remove();
   }, []);
 
   const prayerState = useMemo(() => {
@@ -161,7 +163,7 @@ export default function HomeScreen() {
   }, [now]);
 
   const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
-  const qiblaRotation = qiblaBearing - compassHeading;
+  const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
 
   const apiPlaces: Place[] = (placesQuery.data ?? []).map((place) => ({
     id: String(place.id),
@@ -214,6 +216,14 @@ export default function HomeScreen() {
     const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
     setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
     setLocationEnabled(true);
+  };
+
+  const beginLogin = async () => {
+    try {
+      await startOAuthLogin();
+    } catch (error) {
+      Alert.alert("تعذر تسجيل الدخول", error instanceof Error ? error.message : "تحقق من اتصال الإنترنت وحاول مرة أخرى.");
+    }
   };
 
   return (
@@ -330,7 +340,7 @@ export default function HomeScreen() {
             </View>
             <View style={styles.placeActions}>
               <Pressable onPress={() => toggleFavorite(place.id)} style={styles.iconAction}><Ionicons name={favorites.includes(place.id) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.id) ? COLORS.red : COLORS.muted} /></Pressable>
-              <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else startOAuthLogin(); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>
+              <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else beginLogin(); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>
               <Pressable onPress={() => sharePlace(place)} style={styles.iconAction}><Ionicons name="share-social-outline" size={18} color={COLORS.muted} /></Pressable>
               <Pressable onPress={() => openMaps(place)} style={styles.goButton}><Ionicons name="navigate" size={16} color={COLORS.white} /><Text style={styles.goText}>{ui.go}</Text></Pressable>
             </View>
@@ -338,7 +348,7 @@ export default function HomeScreen() {
           ))}
         </View>)}
 
-        <Pressable style={styles.addPlaceButton} onPress={() => { if (meQuery.data) setAddFormVisible(true); else startOAuthLogin(); }}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
+        <Pressable style={styles.addPlaceButton} onPress={() => { if (meQuery.data) setAddFormVisible(true); else beginLogin(); }}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
         <View style={styles.bottomSpace} />
       </ScrollView>
       <Modal visible={activeTab !== "home"} animationType="slide" transparent onRequestClose={() => setActiveTab("home")}>
@@ -361,7 +371,7 @@ export default function HomeScreen() {
             {activeTab === "account" && <>
               <Text style={styles.modalTitle}>حسابي</Text>
               <Text style={styles.modalHint}>سجّل الدخول لإضافة مكان، حفظ المفضلة، وكتابة التقييمات.</Text>
-              <Pressable style={styles.primaryModalButton} onPress={() => startOAuthLogin()}><Text style={styles.primaryModalText}>تسجيل الدخول</Text></Pressable>
+              <Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>تسجيل الدخول</Text></Pressable>
               <Pressable style={styles.adminLink} onPress={() => { setActiveTab("home"); router.push({ pathname: "/admin" } as never); }}><Text style={styles.adminLinkText}>فتح لوحة الإدارة</Text></Pressable>
             </>}
           </View>

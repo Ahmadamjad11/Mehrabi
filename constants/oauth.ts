@@ -75,7 +75,7 @@ export const getRedirectUri = () => {
   if (ReactNative.Platform.OS === "web") {
     return `${getApiBaseUrl()}/api/oauth/callback`;
   } else {
-    return Linking.createURL("/oauth/callback", {
+    return Linking.createURL("oauth/callback", {
       scheme: env.deepLinkScheme,
     });
   }
@@ -118,14 +118,8 @@ export async function startOAuthLogin(): Promise<string | null> {
     return null;
   }
 
-  const supported = await Linking.canOpenURL(loginUrl);
-  if (!supported) {
-    console.warn("[OAuth] Cannot open login URL: URL scheme not supported");
-    // 可考虑抛出错误或返回错误状态，让调用方处理
-    return null;
-  }
-
   try {
+    // Android browsers can handle HTTPS OAuth URLs even when canOpenURL is unreliable.
     await Linking.openURL(loginUrl);
   } catch {
     console.error("[OAuth] Failed to open login URL");

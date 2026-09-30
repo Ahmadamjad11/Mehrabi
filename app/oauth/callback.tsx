@@ -20,7 +20,7 @@ export default function OAuthCallback() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const handleCallback = async () => {
+    const handleCallback = async (incomingUrl?: string) => {
       console.log("[OAuth] Callback handler triggered");
       try {
         // Check for sessionToken in params first (web OAuth callback from server redirect)
@@ -61,10 +61,10 @@ export default function OAuthCallback() {
         }
 
         // Get URL from params or Linking
-        let url: string | null = null;
+        let url: string | null = incomingUrl ?? null;
 
         // Try to get from local search params first (works with expo-router)
-        if (params.code || params.state || params.error) {
+        if (!url && (params.code || params.state || params.error)) {
           console.log("[OAuth] Found params in route params");
           // Extract from params
           const urlParams = new URLSearchParams();
@@ -73,7 +73,7 @@ export default function OAuthCallback() {
           if (params.error) urlParams.set("error", params.error);
           url = `?${urlParams.toString()}`;
           console.log("[OAuth] Constructed callback URL from params");
-        } else {
+        } else if (!url) {
           console.log("[OAuth] No params found, checking Linking.getInitialURL()...");
           // Fallback: try to get from Linking
           const initialUrl = await Linking.getInitialURL();
@@ -203,7 +203,11 @@ export default function OAuthCallback() {
       }
     };
 
-    handleCallback();
+    const subscription = Linking.addEventListener("url", ({ url }) => {
+      void handleCallback(url);
+    });
+    void handleCallback();
+    return () => subscription.remove();
   }, [params.code, params.state, params.error, params.sessionToken, params.user, router]);
 
   return (
