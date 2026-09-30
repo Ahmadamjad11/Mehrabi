@@ -97,6 +97,27 @@ export const getLoginUrl = () => {
   return url.toString();
 };
 
+async function getRuntimeLoginUrl() {
+  try {
+    return getLoginUrl();
+  } catch {
+    const baseUrl = getApiBaseUrl();
+    if (!baseUrl) throw new Error("خدمة تسجيل الدخول غير متاحة حاليًا");
+    const response = await fetch(`${baseUrl}/api/oauth/config`);
+    if (!response.ok) throw new Error("تعذر تحميل إعدادات تسجيل الدخول");
+    const config = (await response.json()) as { portalUrl?: string; appId?: string };
+    if (!config.portalUrl || !config.appId) throw new Error("تسجيل الدخول غير مهيأ لهذا الإصدار");
+    const redirectUri = getRedirectUri();
+    const state = encodeState(redirectUri);
+    const url = new URL(`${config.portalUrl.replace(/\/$/, "")}/app-auth`);
+    url.searchParams.set("appId", config.appId);
+    url.searchParams.set("redirectUri", redirectUri);
+    url.searchParams.set("state", state);
+    url.searchParams.set("type", "signIn");
+    return url.toString();
+  }
+}
+
 /**
  * Start OAuth login flow.
  *
@@ -108,7 +129,7 @@ export const getLoginUrl = () => {
  * @returns Always null, the callback is handled via deep link.
  */
 export async function startOAuthLogin(): Promise<string | null> {
-  const loginUrl = getLoginUrl();
+  const loginUrl = await getRuntimeLoginUrl();
 
   if (ReactNative.Platform.OS === "web") {
     // On web, just redirect

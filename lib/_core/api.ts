@@ -111,6 +111,7 @@ export async function getMe(): Promise<{
   name: string | null;
   email: string | null;
   loginMethod: string | null;
+  role: "user" | "admin";
   lastSignedIn: string;
 } | null> {
   try {

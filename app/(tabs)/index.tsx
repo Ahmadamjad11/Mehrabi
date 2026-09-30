@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   AppState,
+  Image,
   Linking,
   Modal,
   Platform,
@@ -139,13 +140,14 @@ export default function HomeScreen() {
   const [reviewComment, setReviewComment] = useState("");
   const [reviewRating, setReviewRating] = useState(5);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const ui = language === "ar" ? {
-    greeting: "صباح الخير، محمد ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
+    greeting: "صباح الخير ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
     nearby: "أماكن الصلاة القريبة منك", search: "ابحث عن مسجد، مصلى أو منطقة...", mapLocation: "موقعك الآن", all: "عرض القائمة", mosques: "المساجد", musallas: "المصليات", open: "مفتوح الآن", ablution: "يوجد وضوء", women: "مصلى نساء", nearest: "الأقرب أولًا", verified: "متحقق", unverified: "غير متحقق منه", unknownHours: "الساعات غير معروفة",
     go: "اذهب", add: "أضف مكانًا تعرفه", home: "الرئيسية", explore: "استكشف", qibla: "القبلة", account: "حسابي", prayerPrefix: "صلاة", prayerHint: "لا تفوّت الصلاة أينما كنت", listTitle: "القائمة", listHint: "أنت تشاهد جميع الأماكن القريبة.", exploreTitle: "استكشف أماكن الصلاة", exploreHint: "ابحث وفلتر الأماكن حسب النوع والخدمات، والنتائج مرتبة من الأقرب.", accountTitle: "حسابي", accountHint: "سجّل الدخول لإضافة مكان وكتابة التقييمات.", login: "تسجيل الدخول", admin: "فتح لوحة الإدارة", addTitle: "إضافة مكان جديد", selectLocation: "حدد موقع المكان", placeData: "بيانات المكان", pickerHint: "اضغط على الخريطة لوضع الدبوس بدقة، أو استخدم موقعك الحالي.", useCurrentLocation: "استخدم موقعي الحالي", locationCorrect: "الموقع صحيح، متابعة", editLocation: "تعديل الموقع", namePlaceholder: "اسم المسجد أو المصلى", addressPlaceholder: "العنوان أو المنطقة", hoursPlaceholder: "ساعات العمل أو غير معروفة", buildingPlaceholder: "اسم المبنى (اختياري)", floorPlaceholder: "الطابق (اختياري)", submit: "إرسال للمراجعة", submitting: "جاري الإرسال...", editPlace: "المكان", parking: "مواقف", reviewTitle: "أضف تقييمك", reviewPlaceholder: "اكتب تعليقًا (اختياري)", publishReview: "نشر التقييم", loadMore: "تحميل 20 مكانًا إضافيًا", nearbyCount: "أماكن قريبة",
   } : {
-    greeting: "Good morning, Mohammed ✦", title: "Where will you pray today?", useLocation: "Use my location", located: "Location detected",
+    greeting: "Good morning ✦", title: "Where will you pray today?", useLocation: "Use my location", located: "Location detected",
     nextPrayer: "Next prayer ✦", today: "Today", remaining: "remaining", prayerTimes: "Today's times", guide: "Your guide on the way",
     nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
     go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
@@ -159,7 +161,7 @@ export default function HomeScreen() {
   ];
   const placesQuery = trpc.places.list.useQuery({ search: query.trim() || undefined, limit: 20, offset: placeOffset }, { staleTime: 60_000, retry: 2 });
   const meQuery = trpc.auth.me.useQuery();
-  const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); } });
+  const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
 
   useEffect(() => {
@@ -324,14 +326,18 @@ export default function HomeScreen() {
     }
   };
 
+  const openAddPlace = () => {
+    setSubmitError(null);
+    setAddStep(1);
+    setAddFormVisible(true);
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={styles.brandRow}>
-            <View style={styles.logoMark}>
-              <MaterialCommunityIcons name="mosque-outline" size={22} color={COLORS.white} />
-            </View>
+            <View style={styles.logoMark}><Image source={require("@/assets/images/icon.png")} style={styles.logoImage} /></View>
             <Text style={styles.brand}>مصلاي</Text>
           </View>
           <View style={styles.headerActions}>
@@ -449,7 +455,7 @@ export default function HomeScreen() {
 
         {placesQuery.data?.length === 20 && <Pressable style={styles.loadMoreButton} onPress={() => setPlaceOffset((current) => current + 20)}><Text style={styles.loadMoreText}>{ui.loadMore}</Text></Pressable>}
 
-        <Pressable style={styles.addPlaceButton} onPress={() => { if (meQuery.data) setAddFormVisible(true); else beginLogin(); }}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
+        <Pressable style={styles.addPlaceButton} onPress={openAddPlace}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
         <View style={styles.bottomSpace} />
       </ScrollView>
       <Modal visible={activeTab !== "home"} animationType="slide" transparent onRequestClose={() => setActiveTab("home")}>
@@ -463,19 +469,25 @@ export default function HomeScreen() {
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
-              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي" : "Calculated from your location") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
+              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "وجّه السهم الذهبي نحو الكعبة" : "Point the gold arrow toward the Kaaba"}</Text>
               <View style={styles.qiblaCompass}>
-                <View style={styles.qiblaRing}><Text style={styles.qiblaNorth}>N</Text><Text style={styles.qiblaEast}>E</Text><Text style={styles.qiblaSouth}>S</Text><Text style={styles.qiblaWest}>W</Text><MaterialCommunityIcons name="navigation" size={74} color={COLORS.gold} style={{ transform: [{ rotate: `${qiblaRotation}deg` }] }} /><View style={styles.qiblaCenter} /></View>
+                <View style={styles.qiblaGlow} />
+                <View style={styles.qiblaRing}>
+                  <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
+                  <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><MaterialCommunityIcons name="cube-outline" size={20} color={COLORS.white} /></View></View>
+                  <View style={styles.qiblaCenter} />
+                </View>
               </View>
               <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View></View>
-              <Text style={styles.modalHint}>{language === "ar" ? "حرّك الهاتف على شكل رقم 8 عند الحاجة للمعايرة، وأبعده عن المعادن." : "Move the phone in a figure eight if calibration is needed and keep it away from metal."}</Text>
+              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي بدقة" : "Calculated precisely from your current location") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
+              <Text style={styles.calibrationHint}>{language === "ar" ? "للمعايرة: حرّك الهاتف على شكل رقم 8 وأبعده عن المعادن." : "For calibration, move the phone in a figure eight away from metal."}</Text>
               {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
               <Text style={styles.modalTitle}>{ui.accountTitle}</Text>
-              <Text style={styles.modalHint}>{ui.accountHint}</Text>
-              <Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{ui.login}</Text></Pressable>
-              <Pressable style={styles.adminLink} onPress={() => { setActiveTab("home"); router.push({ pathname: "/admin" } as never); }}><Text style={styles.adminLinkText}>{ui.admin}</Text></Pressable>
+              <Text style={styles.modalHint}>{meQuery.data ? (language === "ar" ? `مرحبًا ${meQuery.data.name || "بك"}` : `Welcome ${meQuery.data.name || ""}`) : ui.accountHint}</Text>
+              {!meQuery.data && <Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{ui.login}</Text></Pressable>}
+              {meQuery.data?.role === "admin" && <Pressable style={styles.adminLink} onPress={() => { setActiveTab("home"); router.push({ pathname: "/admin" } as never); }}><Text style={styles.adminLinkText}>{ui.admin}</Text></Pressable>}
             </>}
           </View>
         </View>
@@ -498,6 +510,7 @@ export default function HomeScreen() {
             <View style={styles.checkRow}><Pressable onPress={() => setHasAblution(!hasAblution)} style={[styles.checkButton, hasAblution && styles.checkButtonActive]}><Text style={styles.typeText}>{hasAblution ? "✓ " : ""}{ui.ablution}</Text></Pressable><Pressable onPress={() => setHasWomenPrayer(!hasWomenPrayer)} style={[styles.checkButton, hasWomenPrayer && styles.checkButtonActive]}><Text style={styles.typeText}>{hasWomenPrayer ? "✓ " : ""}{ui.women}</Text></Pressable><Pressable onPress={() => setHasParking(!hasParking)} style={[styles.checkButton, hasParking && styles.checkButtonActive]}><Text style={styles.typeText}>{hasParking ? "✓ " : ""}{ui.parking}</Text></Pressable></View>
             <Pressable style={styles.secondaryModalButton} onPress={() => setAddStep(1)}><Text style={styles.secondaryModalText}>{ui.editLocation}</Text></Pressable>
             <Pressable style={styles.primaryModalButton} disabled={submitPlace.isPending || !placeName.trim()} onPress={() => submitPlace.mutate({ name: placeName, type: placeType, address: placeAddress, hours: placeHours || "غير معروفة", description: buildingName ? `المبنى: ${buildingName}، الطابق: ${buildingFloor || "غير محدد"}` : undefined, latitude: userLocation?.lat ?? 31.9539, longitude: userLocation?.lng ?? 35.9106, hasAblution, hasWomenPrayer, hasParking })}><Text style={styles.primaryModalText}>{submitPlace.isPending ? ui.submitting : ui.submit}</Text></Pressable>
+            {submitError && <Text style={styles.formError}>{submitError}</Text>}
           </>}
         </View></View>
       </Modal>
@@ -525,7 +538,8 @@ const styles = StyleSheet.create({
   scroll: { paddingHorizontal: 18, paddingBottom: 88 },
   header: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingTop: 8, paddingBottom: 23 },
   brandRow: { flexDirection: "row-reverse", alignItems: "center", gap: 9 },
-  logoMark: { width: 38, height: 38, borderRadius: 12, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center" },
+  logoMark: { width: 38, height: 38, borderRadius: 12, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  logoImage: { width: 38, height: 38 },
   brand: { color: COLORS.navy, fontSize: 20, fontWeight: "800" },
   headerActions: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
   languageButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.line },
@@ -624,19 +638,24 @@ const styles = StyleSheet.create({
   modalHint: { color: COLORS.muted, fontSize: 12, lineHeight: 20, textAlign: "right", marginBottom: 16 },
   exploreRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   exploreRowText: { color: COLORS.ink, fontSize: 14, fontWeight: "700" },
-  qiblaCompass: { alignItems: "center", justifyContent: "center", height: 150, marginVertical: 6 },
+  qiblaHeroHint: { color: COLORS.teal, fontSize: 13, fontWeight: "800", textAlign: "center", marginBottom: 3 },
+  qiblaCompass: { alignItems: "center", justifyContent: "center", height: 220, marginVertical: 2, position: "relative" },
+  qiblaGlow: { position: "absolute", width: 205, height: 205, borderRadius: 103, backgroundColor: "#EAF7F5" },
   qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
-  qiblaRing: { width: 154, height: 154, borderRadius: 77, borderWidth: 6, borderColor: "#DCE9EC", backgroundColor: "#F8FCFC", alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  qiblaRing: { width: 188, height: 188, borderRadius: 94, borderWidth: 7, borderColor: "#C9E3E0", backgroundColor: "#F8FCFC", alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
   qiblaNorth: { position: "absolute", top: 10, color: COLORS.navy, fontWeight: "900", fontSize: 12 },
   qiblaEast: { position: "absolute", right: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
   qiblaSouth: { position: "absolute", bottom: 10, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
   qiblaWest: { position: "absolute", left: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaCenter: { position: "absolute", width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.navy, borderWidth: 2, borderColor: COLORS.white },
+  qiblaNeedle: { alignItems: "center", justifyContent: "center", width: 86, height: 86 },
+  kaabaBadge: { position: "absolute", top: 6, width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: COLORS.gold },
+  qiblaCenter: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: COLORS.navy, borderWidth: 3, borderColor: COLORS.white },
   qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
   qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
   qiblaStatLabel: { color: COLORS.muted, fontSize: 10, textAlign: "center", marginTop: 2 },
   primaryModalButton: { height: 46, borderRadius: 13, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
   primaryModalText: { color: COLORS.white, fontSize: 13, fontWeight: "800" },
+  calibrationHint: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "center", marginBottom: 3 },
   secondaryModalButton: { height: 44, borderRadius: 13, backgroundColor: COLORS.canvas, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center", marginTop: 10 },
   secondaryModalText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
   pickerMap: { height: 220, overflow: "hidden", borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 4 },
@@ -647,6 +666,7 @@ const styles = StyleSheet.create({
   adminLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800" },
   formInput: { height: 48, borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 12, color: COLORS.ink, marginBottom: 10, backgroundColor: COLORS.canvas },
   commentInput: { height: 90, paddingTop: 12, textAlignVertical: "top" },
+  formError: { color: COLORS.red, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
   ratingRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginVertical: 14 },
   typeRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 6 },
   typeButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },

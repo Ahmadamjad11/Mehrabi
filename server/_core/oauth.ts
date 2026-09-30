@@ -60,11 +60,19 @@ function buildUserResponse(
     name: user?.name ?? null,
     email: user?.email ?? null,
     loginMethod: user?.loginMethod ?? null,
+    role: (user as any)?.role ?? "user",
     lastSignedIn: (user?.lastSignedIn ?? new Date()).toISOString(),
   };
 }
 
 export function registerOAuthRoutes(app: Express) {
+  app.get("/api/oauth/config", (_req: Request, res: Response) => {
+    res.json({
+      appId: process.env.MANUS_PROJECT_ID ?? process.env.VITE_APP_ID ?? "",
+      portalUrl: process.env.MANUS_OAUTH_PORTAL_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? process.env.OAUTH_SERVER_URL ?? "",
+    });
+  });
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");

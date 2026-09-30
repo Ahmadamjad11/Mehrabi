@@ -62,8 +62,8 @@ export const appRouter = router({
         return filtered.slice(offset, offset + limit);
       }),
     byId: publicProcedure.input(z.object({ id: z.number().int().positive() })).query(({ input }) => getPlaceById(input.id)),
-    submit: protectedProcedure.input(placeInput).mutation(({ ctx, input }) =>
-      createPlace({ ...input, status: "pending", createdBy: ctx.user.id }),
+    submit: publicProcedure.input(placeInput).mutation(({ ctx, input }) =>
+      createPlace({ ...input, status: "pending", createdBy: ctx.user?.id }),
     ),
     favoriteIds: protectedProcedure.query(({ ctx }) => getFavoritePlaceIds(ctx.user.id)),
     setFavorite: protectedProcedure
