@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { favorites, InsertPlace, InsertUser, places, reviews, User, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -93,6 +93,12 @@ export async function listPlaces(status: "approved" | "pending" | "rejected" = "
   const db = await getDb();
   if (!db) return [];
   return db.select().from(places).where(eq(places.status, status));
+}
+
+export async function listPublicPlaces() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(places).where(inArray(places.status, ["approved", "pending"]));
 }
 
 export async function getPlaceById(id: number) {

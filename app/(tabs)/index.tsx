@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  AppState,
   Linking,
   Modal,
   Platform,
@@ -20,6 +21,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { trpc } from "@/lib/trpc";
 import { startOAuthLogin } from "@/constants/oauth";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const COLORS = {
   navy: "#102D4A",
@@ -48,6 +50,7 @@ type Place = {
   parking: boolean;
   lat: number;
   lng: number;
+  status?: "approved" | "pending" | "rejected";
 };
 
 const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: number; lng: number }) => {
@@ -60,13 +63,13 @@ const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: nu
   return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} م` : `${distanceKm.toFixed(1)} كم`;
 };
 
-const getPrayerSchedule = (now: Date) => {
+const getPrayerSchedule = (now: Date, location: { lat: number; lng: number } | null) => {
   const params = CalculationMethod.MuslimWorldLeague();
   params.madhab = Madhab.Shafi;
-  const times = new PrayerTimes(new Coordinates(31.9539, 35.9106), now, params);
+  const times = new PrayerTimes(new Coordinates(location?.lat ?? 31.9539, location?.lng ?? 35.9106), now, params);
   return [
     ["الفجر", times.fajr],
-    ["الظهر", times.dhuhr],
+    [now.getDay() === 5 ? "الجمعة" : "الظهر", times.dhuhr],
     ["العصر", times.asr],
     ["المغرب", times.maghrib],
     ["العشاء", times.isha],
@@ -99,10 +102,13 @@ const createOsmHtml = (places: Place[], userLocation: { lat: number; lng: number
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0;background:#e3efef} .leaflet-control-attribution{font-size:8px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map',{zoomControl:false}).setView(${center},13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);const points=${points};points.forEach(([lat,lng,name])=>L.marker([lat,lng]).addTo(map).bindPopup(name));${userMarker}</script></body></html>`;
 };
 
+const createPickerHtml = (location: { lat: number; lng: number }) => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map').setView([${location.lat},${location.lng}],16);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);let marker=L.marker([${location.lat},${location.lng}]).addTo(map);map.on('click',e=>{marker.setLatLng(e.latlng);window.ReactNativeWebView.postMessage(JSON.stringify({lat:e.latlng.lat,lng:e.latlng.lng}))});</script></body></html>`;
+
 export default function HomeScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const [activeFilter, setActiveFilter] = useState("الأقرب أولًا");
+  const [placeOffset, setPlaceOffset] = useState(0);
+  const [activeFilter, setActiveFilter] = useState("nearest");
   const [favorites, setFavorites] = useState<string[]>([]);
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
@@ -116,28 +122,90 @@ export default function HomeScreen() {
   const [placeName, setPlaceName] = useState("");
   const [placeAddress, setPlaceAddress] = useState("");
   const [placeType, setPlaceType] = useState<"mosque" | "musalla">("mosque");
+  const [addStep, setAddStep] = useState<1 | 2>(1);
+  const [placeHours, setPlaceHours] = useState("");
+  const [hasAblution, setHasAblution] = useState(false);
+  const [hasParking, setHasParking] = useState(false);
+  const [buildingName, setBuildingName] = useState("");
+  const [buildingFloor, setBuildingFloor] = useState("");
   const [reviewComment, setReviewComment] = useState("");
   const [reviewRating, setReviewRating] = useState(5);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const ui = language === "ar" ? {
     greeting: "صباح الخير، محمد ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
-    nearby: "أماكن الصلاة القريبة منك", search: "ابحث عن مسجد، مصلى أو منطقة...", mapLocation: "موقعك الآن", all: "عرض القائمة",
+    nearby: "أماكن الصلاة القريبة منك", search: "ابحث عن مسجد، مصلى أو منطقة...", mapLocation: "موقعك الآن", all: "عرض القائمة", mosques: "المساجد", musallas: "المصليات", open: "مفتوح الآن", ablution: "يوجد وضوء", women: "مصلى نساء", nearest: "الأقرب أولًا", verified: "متحقق", unverified: "غير متحقق منه", unknownHours: "الساعات غير معروفة",
     go: "اذهب", add: "أضف مكانًا تعرفه", home: "الرئيسية", explore: "استكشف", qibla: "القبلة", account: "حسابي",
   } : {
     greeting: "Good morning, Mohammed ✦", title: "Where will you pray today?", useLocation: "Use my location", located: "Location detected",
     nextPrayer: "Next prayer ✦", today: "Today", remaining: "remaining", prayerTimes: "Today's times", guide: "Your guide on the way",
-    nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list",
+    nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
     go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account",
   };
-  const placesQuery = trpc.places.list.useQuery({}, { staleTime: 60_000, retry: 2 });
+  const filterOptions = [
+    { key: "nearest", label: ui.nearest },
+    { key: "open", label: ui.open },
+    { key: "ablution", label: ui.ablution },
+    { key: "favorites", label: language === "ar" ? "المفضلة" : "Favorites" },
+  ];
+  const placesQuery = trpc.places.list.useQuery({ search: query.trim() || undefined, limit: 20, offset: placeOffset }, { staleTime: 60_000, retry: 2 });
   const meQuery = trpc.auth.me.useQuery();
-  const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setAddFormVisible(false); setPlaceName(""); placesQuery.refetch(); } });
+  const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); } });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
+
+  useEffect(() => {
+    setPlaceOffset(0);
+  }, [query]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    void AsyncStorage.getItem("maslay:favorites").then((value) => {
+      if (value) setFavorites(JSON.parse(value));
+    });
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.setItem("maslay:favorites", JSON.stringify(favorites));
+  }, [favorites]);
+
+  useEffect(() => {
+    let watcher: Location.LocationSubscription | null = null;
+    let cancelled = false;
+    const refreshLocation = async () => {
+      try {
+        const permission = await Location.getForegroundPermissionsAsync();
+        if (permission.status !== "granted") return;
+        const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (!cancelled) {
+          setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
+          setLocationEnabled(true);
+          setLocationError(null);
+        }
+      } catch {
+        if (!cancelled) setLocationError(language === "ar" ? "تعذر تحديد الموقع" : "Unable to determine location");
+      }
+    };
+    void refreshLocation();
+    const appStateSubscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refreshLocation();
+    });
+    Location.watchPositionAsync(
+      { accuracy: Location.Accuracy.Balanced, distanceInterval: 100, timeInterval: 60_000 },
+      (position) => {
+        setUserLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+        setLocationEnabled(true);
+      },
+    ).then((subscription) => { watcher = subscription; }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+      watcher?.remove();
+      appStateSubscription.remove();
+    };
+  }, [language, locationEnabled]);
 
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
@@ -152,15 +220,15 @@ export default function HomeScreen() {
   }, []);
 
   const prayerState = useMemo(() => {
-    const today = getPrayerSchedule(now);
+    const today = getPrayerSchedule(now, userLocation);
     let next = today.find(([, time]) => time.getTime() > now.getTime());
     if (!next) {
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
-      next = getPrayerSchedule(tomorrow)[0];
+      next = getPrayerSchedule(tomorrow, userLocation)[0];
     }
     return { name: next[0], time: next[1] };
-  }, [now]);
+  }, [now, userLocation]);
 
   const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
   const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
@@ -176,6 +244,7 @@ export default function HomeScreen() {
     parking: place.hasParking,
     lat: place.latitude,
     lng: place.longitude,
+    status: place.status,
     distanceMeters: userLocation ? Math.round(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).includes("كم") ? Number(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).replace(" كم", "")) * 1000 : Number(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).replace(" م", ""))) : Number.MAX_SAFE_INTEGER,
   }));
   const sourcePlaces = apiPlaces;
@@ -184,10 +253,9 @@ export default function HomeScreen() {
     let result = sourcePlaces.filter((place) =>
       place.name.toLowerCase().includes(query.trim().toLowerCase()),
     );
-    if (activeFilter === "مفتوح الآن") result = result.filter((place) => place.open === true);
-    if (activeFilter === "يوجد وضوء") result = result.filter((place) => place.ablution);
-    if (activeFilter === "يوجد موقف") result = result.filter((place) => place.parking);
-    if (activeFilter === "المفضلة") result = result.filter((place) => favorites.includes(place.id));
+    if (activeFilter === "open") result = result.filter((place) => place.open === true);
+    if (activeFilter === "ablution") result = result.filter((place) => place.ablution);
+    if (activeFilter === "favorites") result = result.filter((place) => favorites.includes(place.id));
     return result.sort((a, b) => a.distanceMeters - b.distanceMeters);
   }, [activeFilter, favorites, query, sourcePlaces]);
 
@@ -208,14 +276,19 @@ export default function HomeScreen() {
   };
 
   const requestLocation = async () => {
-    const permission = await Location.requestForegroundPermissionsAsync();
-    if (permission.status !== "granted") {
-      Alert.alert("نحتاج موقعك", "يمكنك استخدام البحث اليدوي بدلًا من ذلك، أو تفعيل الموقع من إعدادات الهاتف.");
-      return;
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== "granted") {
+        Alert.alert(language === "ar" ? "نحتاج موقعك" : "Location needed", language === "ar" ? "نستخدمه لعرض الأماكن الأقرب فقط، ويمكنك البحث يدويًا بدلًا من ذلك." : "We use it only to show nearby places. You can search manually instead.");
+        return;
+      }
+      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
+      setLocationEnabled(true);
+      setLocationError(null);
+    } catch {
+      setLocationError(language === "ar" ? "تعذر تحديد الموقع" : "Unable to determine location");
     }
-    const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
-    setLocationEnabled(true);
   };
 
   const beginLogin = async () => {
@@ -271,7 +344,7 @@ export default function HomeScreen() {
           <View style={styles.progressTrack}><View style={styles.progressFill} /></View>
           <View style={styles.prayerFooter}>
             <Text style={styles.nextHint}>لا تفوّت الصلاة أينما كنت</Text>
-            <Pressable onPress={() => Alert.alert("مواقيت الصلاة", getPrayerSchedule(now).map(([name, time]) => `${name}: ${formatClock(time, language)}`).join("\n"))}>
+              <Pressable onPress={() => Alert.alert("مواقيت الصلاة", getPrayerSchedule(now, userLocation).map(([name, time]) => `${name}: ${formatClock(time, language)}`).join("\n"))}>
               <Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text>
             </Pressable>
           </View>
@@ -301,15 +374,14 @@ export default function HomeScreen() {
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
-          {["المزيد", "مفتوح الآن", "يوجد وضوء", "يوجد موقف", "المفضلة"].map((filter) => {
-            const active = activeFilter === filter;
+          {filterOptions.map((filter) => {
+            const active = activeFilter === filter.key;
             return (
-              <Pressable key={filter} onPress={() => setActiveFilter(filter)} style={[styles.filterChip, active && styles.filterChipActive]}>
-                {filter === "مفتوح الآن" && <View style={[styles.dot, { backgroundColor: active ? COLORS.white : COLORS.green }]} />}
-                {filter === "يوجد وضوء" && <Ionicons name="water-outline" size={15} color={active ? COLORS.white : COLORS.teal} />}
-                {filter === "يوجد موقف" && <Ionicons name="car-outline" size={15} color={active ? COLORS.white : COLORS.muted} />}
-                {filter === "المفضلة" && <Ionicons name="heart-outline" size={15} color={active ? COLORS.white : COLORS.red} />}
-                <Text style={[styles.filterText, active && styles.filterTextActive]}>{filter}</Text>
+              <Pressable key={filter.key} onPress={() => setActiveFilter(filter.key)} style={[styles.filterChip, active && styles.filterChipActive]}>
+                {filter.key === "open" && <View style={[styles.dot, { backgroundColor: active ? COLORS.white : COLORS.green }]} />}
+                {filter.key === "ablution" && <Ionicons name="water-outline" size={15} color={active ? COLORS.white : COLORS.teal} />}
+                {filter.key === "favorites" && <Ionicons name="heart-outline" size={15} color={active ? COLORS.white : COLORS.red} />}
+                <Text style={[styles.filterText, active && styles.filterTextActive]}>{filter.label}</Text>
               </Pressable>
             );
           })}
@@ -322,10 +394,10 @@ export default function HomeScreen() {
           <Pressable style={styles.mapControl} onPress={requestLocation}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
         </View>
 
-        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{filteredPlaces.length} أماكن قريبة</Text><Pressable onPress={() => setActiveFilter("الأقرب أولًا")}><Text style={styles.sortText}>{activeFilter === "الأقرب أولًا" ? "الأقرب أولًا" : "إلغاء الفلتر"}</Text></Pressable></View>
+        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{filteredPlaces.length} {language === "ar" ? "أماكن قريبة" : "nearby places"}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
         {[
-          ["المساجد", mosques],
-          ["المصليات", musallas],
+          [ui.mosques, mosques],
+          [ui.musallas, musallas],
         ].map(([groupTitle, groupPlaces]) => groupPlaces.length > 0 && <View key={groupTitle as string}>
           <Text style={styles.groupTitle}>{groupTitle as string}</Text>
           {(groupPlaces as Place[]).map((place) => (
@@ -333,9 +405,9 @@ export default function HomeScreen() {
             <View style={styles.placeMain}>
               <View style={styles.placeIcon}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={COLORS.navy} /></View>
               <View style={styles.placeInfo}>
-                <View style={styles.nameRow}><Text style={styles.placeName}>{place.name}</Text><View style={[styles.openPill, place.open === false && styles.closedPill, place.open === null && styles.unknownPill]}><Text style={[styles.openText, place.open === false && styles.closedText, place.open === null && styles.unknownText]}>{place.open === true ? "مفتوح" : place.open === false ? "مغلق" : "الساعات غير محددة"}</Text></View></View>
-                <Text style={styles.placeMeta}>{place.type} · {place.distance} · {place.drive} بالسيارة</Text>
-                <View style={styles.amenities}><Text style={styles.metaTime}>منذ 8 دقائق</Text>{place.ablution && <Text style={styles.amenity}><Ionicons name="water" size={13} color={COLORS.teal} /> وضوء</Text>}{place.parking && <Text style={styles.amenity}><Ionicons name="car" size={13} color={COLORS.muted} /> موقف</Text>}</View>
+                <View style={styles.nameRow}><Text style={styles.placeName}>{place.name}</Text>{place.status === "pending" && <View style={styles.unverifiedPill}><Text style={styles.unverifiedText}>{ui.unverified}</Text></View>}<View style={[styles.openPill, place.open === false && styles.closedPill, place.open === null && styles.unknownPill]}><Text style={[styles.openText, place.open === false && styles.closedText, place.open === null && styles.unknownText]}>{place.open === true ? (language === "ar" ? "مفتوح" : "Open") : place.open === false ? (language === "ar" ? "مغلق" : "Closed") : ui.unknownHours}</Text></View></View>
+                <Text style={styles.placeMeta}>{language === "ar" ? place.type : (place.type === "مسجد" ? "Mosque" : "Musalla")} · {place.distance} · {place.drive}{language === "ar" ? " بالسيارة" : " by car"}</Text>
+                <View style={styles.amenities}><Text style={styles.metaTime}>{language === "ar" ? "قريب" : "Nearby"}</Text>{place.ablution && <Text style={styles.amenity}><Ionicons name="water" size={13} color={COLORS.teal} /> {language === "ar" ? "وضوء" : "Ablution"}</Text>}{place.parking && <Text style={styles.amenity}><Ionicons name="car" size={13} color={COLORS.muted} /> {language === "ar" ? "موقف" : "Parking"}</Text>}</View>
               </View>
             </View>
             <View style={styles.placeActions}>
@@ -347,6 +419,8 @@ export default function HomeScreen() {
           </View>
           ))}
         </View>)}
+
+        {placesQuery.data?.length === 20 && <Pressable style={styles.loadMoreButton} onPress={() => setPlaceOffset((current) => current + 20)}><Text style={styles.loadMoreText}>{language === "ar" ? "تحميل 20 مكانًا إضافيًا" : "Load 20 more places"}</Text></Pressable>}
 
         <Pressable style={styles.addPlaceButton} onPress={() => { if (meQuery.data) setAddFormVisible(true); else beginLogin(); }}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
         <View style={styles.bottomSpace} />
@@ -361,12 +435,14 @@ export default function HomeScreen() {
               {["الأقرب أولًا", "مفتوح الآن", "يوجد وضوء", "يوجد موقف", "المفضلة"].map((filter) => <Pressable key={filter} style={styles.exploreRow} onPress={() => { setActiveFilter(filter); setActiveTab("home"); }}><Text style={styles.exploreRowText}>{filter}</Text><Ionicons name="chevron-back" size={18} color={COLORS.muted} /></Pressable>)}
             </>}
             {activeTab === "qibla" && <>
-              <Text style={styles.modalTitle}>اتجاه القبلة</Text>
-              <Text style={styles.modalHint}>{userLocation ? "اعتمادًا على موقعك الحالي" : "اعتمادًا على موقع عمّان التقريبي — فعّل الموقع لدقة أعلى"}</Text>
-              <View style={styles.qiblaCompass}><MaterialCommunityIcons name="navigation" size={92} color={COLORS.gold} style={{ transform: [{ rotate: `${qiblaRotation}deg` }] }} /></View>
-              <Text style={styles.qiblaDegrees}>{Math.round(qiblaBearing)}°</Text>
-              <Text style={styles.modalHint}>وجّه الهاتف نحو السهم للوصول إلى الكعبة</Text>
-              {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>تحديد موقعي</Text></Pressable>}
+              <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
+              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي" : "Calculated from your location") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
+              <View style={styles.qiblaCompass}>
+                <View style={styles.qiblaRing}><Text style={styles.qiblaNorth}>N</Text><Text style={styles.qiblaEast}>E</Text><Text style={styles.qiblaSouth}>S</Text><Text style={styles.qiblaWest}>W</Text><MaterialCommunityIcons name="navigation" size={74} color={COLORS.gold} style={{ transform: [{ rotate: `${qiblaRotation}deg` }] }} /><View style={styles.qiblaCenter} /></View>
+              </View>
+              <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View></View>
+              <Text style={styles.modalHint}>{language === "ar" ? "حرّك الهاتف على شكل رقم 8 عند الحاجة للمعايرة، وأبعده عن المعادن." : "Move the phone in a figure eight if calibration is needed and keep it away from metal."}</Text>
+              {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
               <Text style={styles.modalTitle}>حسابي</Text>
@@ -380,11 +456,22 @@ export default function HomeScreen() {
       <Modal visible={addFormVisible} animationType="slide" transparent onRequestClose={() => setAddFormVisible(false)}>
         <View style={styles.modalBackdrop}><View style={styles.modalCard}>
           <Pressable style={styles.modalClose} onPress={() => setAddFormVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
-          <Text style={styles.modalTitle}>إضافة مكان جديد</Text>
-          <TextInput value={placeName} onChangeText={setPlaceName} placeholder="اسم المسجد أو المصلى" style={styles.formInput} textAlign="right" />
-          <TextInput value={placeAddress} onChangeText={setPlaceAddress} placeholder="العنوان أو المنطقة" style={styles.formInput} textAlign="right" />
-          <View style={styles.typeRow}><Pressable style={[styles.typeButton, placeType === "mosque" && styles.typeButtonActive]} onPress={() => setPlaceType("mosque")}><Text style={styles.typeText}>مسجد</Text></Pressable><Pressable style={[styles.typeButton, placeType === "musalla" && styles.typeButtonActive]} onPress={() => setPlaceType("musalla")}><Text style={styles.typeText}>مصلى</Text></Pressable></View>
-          <Pressable style={styles.primaryModalButton} disabled={submitPlace.isPending || !placeName.trim()} onPress={() => submitPlace.mutate({ name: placeName, type: placeType, address: placeAddress, latitude: userLocation?.lat ?? 31.9539, longitude: userLocation?.lng ?? 35.9106, hasAblution: false, hasParking: false })}><Text style={styles.primaryModalText}>{submitPlace.isPending ? "جاري الإرسال..." : "إرسال للمراجعة"}</Text></Pressable>
+          <Text style={styles.modalTitle}>{addStep === 1 ? "حدد موقع المكان" : "بيانات المكان"}</Text>
+          {addStep === 1 ? <>
+            <Text style={styles.modalHint}>اضغط على الخريطة لوضع الدبوس بدقة، أو استخدم موقعك الحالي.</Text>
+            <View style={styles.pickerMap}><WebView source={{ html: createPickerHtml(userLocation ?? { lat: 31.9539, lng: 35.9106 }) }} onMessage={(event) => { try { const next = JSON.parse(event.nativeEvent.data); setUserLocation({ lat: next.lat, lng: next.lng }); } catch { /* ignore malformed map events */ } }} originWhitelist={["*"]} javaScriptEnabled /></View>
+            <Pressable style={styles.secondaryModalButton} onPress={requestLocation}><Text style={styles.secondaryModalText}>استخدم موقعي الحالي</Text></Pressable>
+            <Pressable style={styles.primaryModalButton} disabled={!userLocation} onPress={() => setAddStep(2)}><Text style={styles.primaryModalText}>الموقع صحيح، متابعة</Text></Pressable>
+          </> : <>
+            <TextInput value={placeName} onChangeText={setPlaceName} placeholder="اسم المسجد أو المصلى" style={styles.formInput} textAlign="right" />
+            <TextInput value={placeAddress} onChangeText={setPlaceAddress} placeholder="العنوان أو المنطقة" style={styles.formInput} textAlign="right" />
+            <View style={styles.typeRow}><Pressable style={[styles.typeButton, placeType === "mosque" && styles.typeButtonActive]} onPress={() => setPlaceType("mosque")}><Text style={styles.typeText}>مسجد</Text></Pressable><Pressable style={[styles.typeButton, placeType === "musalla" && styles.typeButtonActive]} onPress={() => setPlaceType("musalla")}><Text style={styles.typeText}>مصلى</Text></Pressable></View>
+            <TextInput value={placeHours} onChangeText={setPlaceHours} placeholder="ساعات العمل أو غير معروفة" style={styles.formInput} textAlign="right" />
+            {placeType === "musalla" && <><TextInput value={buildingName} onChangeText={setBuildingName} placeholder="اسم المبنى (اختياري)" style={styles.formInput} textAlign="right" /><TextInput value={buildingFloor} onChangeText={setBuildingFloor} placeholder="الطابق (اختياري)" style={styles.formInput} textAlign="right" /></>}
+            <View style={styles.checkRow}><Pressable onPress={() => setHasAblution(!hasAblution)} style={[styles.checkButton, hasAblution && styles.checkButtonActive]}><Text style={styles.typeText}>{hasAblution ? "✓ " : ""}وضوء</Text></Pressable><Pressable onPress={() => setHasParking(!hasParking)} style={[styles.checkButton, hasParking && styles.checkButtonActive]}><Text style={styles.typeText}>{hasParking ? "✓ " : ""}مواقف</Text></Pressable></View>
+            <Pressable style={styles.secondaryModalButton} onPress={() => setAddStep(1)}><Text style={styles.secondaryModalText}>تعديل الموقع</Text></Pressable>
+            <Pressable style={styles.primaryModalButton} disabled={submitPlace.isPending || !placeName.trim()} onPress={() => submitPlace.mutate({ name: placeName, type: placeType, address: placeAddress, hours: placeHours || "غير معروفة", description: buildingName ? `المبنى: ${buildingName}، الطابق: ${buildingFloor || "غير محدد"}` : undefined, latitude: userLocation?.lat ?? 31.9539, longitude: userLocation?.lng ?? 35.9106, hasAblution, hasParking })}><Text style={styles.primaryModalText}>{submitPlace.isPending ? "جاري الإرسال..." : "إرسال للمراجعة"}</Text></Pressable>
+          </>}
         </View></View>
       </Modal>
       <Modal visible={reviewVisible} animationType="slide" transparent onRequestClose={() => setReviewVisible(false)}>
@@ -480,6 +567,8 @@ const styles = StyleSheet.create({
   openPill: { backgroundColor: "#E5F7F0", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 3 },
   closedPill: { backgroundColor: "#FBEAE8" },
   unknownPill: { backgroundColor: "#FFF2D8" },
+  unverifiedPill: { backgroundColor: "#F1F3F5", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 3 },
+  unverifiedText: { color: COLORS.muted, fontSize: 9, fontWeight: "800" },
   openText: { color: COLORS.green, fontSize: 9, fontWeight: "800" },
   closedText: { color: COLORS.red },
   unknownText: { color: "#B87914" },
@@ -493,6 +582,8 @@ const styles = StyleSheet.create({
   goText: { color: COLORS.white, fontSize: 10, fontWeight: "800" },
   addPlaceButton: { height: 46, borderRadius: 13, borderWidth: 1, borderColor: "#D6E0E5", borderStyle: "dashed", alignItems: "center", justifyContent: "center", flexDirection: "row-reverse", gap: 7, marginTop: 2 },
   addPlaceText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
+  loadMoreButton: { height: 42, borderRadius: 12, backgroundColor: "#EEF5F8", alignItems: "center", justifyContent: "center", marginBottom: 10 },
+  loadMoreText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
   bottomSpace: { height: 12 },
   tabBar: { position: "absolute", bottom: 0, left: 0, right: 0, height: 73, backgroundColor: "rgba(255,255,255,0.98)", borderTopWidth: 1, borderTopColor: COLORS.line, flexDirection: "row-reverse", justifyContent: "space-around", alignItems: "center", paddingBottom: 8 },
   tabItem: { alignItems: "center", gap: 4, minWidth: 62 },
@@ -507,8 +598,23 @@ const styles = StyleSheet.create({
   exploreRowText: { color: COLORS.ink, fontSize: 14, fontWeight: "700" },
   qiblaCompass: { alignItems: "center", justifyContent: "center", height: 150, marginVertical: 6 },
   qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
+  qiblaRing: { width: 154, height: 154, borderRadius: 77, borderWidth: 6, borderColor: "#DCE9EC", backgroundColor: "#F8FCFC", alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 3 },
+  qiblaNorth: { position: "absolute", top: 10, color: COLORS.navy, fontWeight: "900", fontSize: 12 },
+  qiblaEast: { position: "absolute", right: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
+  qiblaSouth: { position: "absolute", bottom: 10, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
+  qiblaWest: { position: "absolute", left: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
+  qiblaCenter: { position: "absolute", width: 10, height: 10, borderRadius: 5, backgroundColor: COLORS.navy, borderWidth: 2, borderColor: COLORS.white },
+  qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
+  qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
+  qiblaStatLabel: { color: COLORS.muted, fontSize: 10, textAlign: "center", marginTop: 2 },
   primaryModalButton: { height: 46, borderRadius: 13, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
   primaryModalText: { color: COLORS.white, fontSize: 13, fontWeight: "800" },
+  secondaryModalButton: { height: 44, borderRadius: 13, backgroundColor: COLORS.canvas, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center", marginTop: 10 },
+  secondaryModalText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
+  pickerMap: { height: 220, overflow: "hidden", borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 4 },
+  checkRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 4 },
+  checkButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },
+  checkButtonActive: { backgroundColor: "#E5F7F0", borderColor: COLORS.green },
   adminLink: { alignItems: "center", paddingVertical: 14 },
   adminLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800" },
   formInput: { height: 48, borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 12, color: COLORS.ink, marginBottom: 10, backgroundColor: COLORS.canvas },

@@ -8,6 +8,7 @@ import {
   getFavoritePlaceIds,
   getPlaceById,
   listPlaces,
+  listPublicPlaces,
   setFavorite,
   updatePlaceStatus,
 } from "./db";
@@ -38,17 +39,20 @@ export const appRouter = router({
   }),
   places: router({
     list: publicProcedure
-      .input(z.object({ search: z.string().optional(), openNow: z.boolean().optional(), hasAblution: z.boolean().optional(), hasParking: z.boolean().optional() }).optional())
+      .input(z.object({ search: z.string().optional(), openNow: z.boolean().optional(), hasAblution: z.boolean().optional(), hasParking: z.boolean().optional(), limit: z.number().int().min(1).max(20).default(20), offset: z.number().int().min(0).default(0) }).optional())
       .query(async ({ input }) => {
-        const rows = await listPlaces();
+        const rows = await listPublicPlaces();
         const search = input?.search?.trim().toLowerCase();
-        return rows.filter((place) => {
+        const filtered = rows.filter((place) => {
           if (search && !`${place.name} ${place.nameEn ?? ""} ${place.address ?? ""}`.toLowerCase().includes(search)) return false;
           if (input?.openNow && place.status !== "approved") return false;
           if (input?.hasAblution && !place.hasAblution) return false;
           if (input?.hasParking && !place.hasParking) return false;
           return true;
         });
+        const offset = input?.offset ?? 0;
+        const limit = input?.limit ?? 20;
+        return filtered.slice(offset, offset + limit);
       }),
     byId: publicProcedure.input(z.object({ id: z.number().int().positive() })).query(({ input }) => getPlaceById(input.id)),
     submit: protectedProcedure.input(placeInput).mutation(({ ctx, input }) =>
