@@ -89,10 +89,16 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-export async function listPlaces(status: "approved" | "pending" | "rejected" = "approved") {
+export async function listPlaces(status: "approved" | "pending" | "rejected" | "deleted" = "approved") {
   const db = await getDb();
   if (!db) return [];
   return db.select().from(places).where(eq(places.status, status));
+}
+
+export async function listAllPlaces() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(places);
 }
 
 export async function listPublicPlaces() {
@@ -142,4 +148,28 @@ export async function updatePlaceStatus(placeId: number, status: "approved" | "r
   const db = await getDb();
   if (!db) throw new Error("Database is not available");
   await db.update(places).set({ status, reviewedBy, reviewedAt: new Date() }).where(eq(places.id, placeId));
+}
+
+export async function deletePlace(placeId: number, reviewedBy: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(places).set({ status: "deleted", reviewedBy, reviewedAt: new Date() }).where(eq(places.id, placeId));
+}
+
+export async function restorePlace(placeId: number, reviewedBy: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(places).set({ status: "approved", reviewedBy, reviewedAt: new Date() }).where(eq(places.id, placeId));
+}
+
+export async function listReviews() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(reviews);
+}
+
+export async function updateReviewStatus(reviewId: number, status: "visible" | "hidden" | "reported") {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(reviews).set({ status }).where(eq(reviews.id, reviewId));
 }

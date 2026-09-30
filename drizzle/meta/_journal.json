@@ -15,6 +15,20 @@
       "when": 1790707481524,
       "tag": "0001_workable_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1790781720000,
+      "tag": "0002_add_women_prayer",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1790781721000,
+      "tag": "0003_add_deleted_status",
+      "breakpoints": true
     }
   ]
 }

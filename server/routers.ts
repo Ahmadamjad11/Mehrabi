@@ -5,12 +5,17 @@ import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_
 import {
   addReview,
   createPlace,
+  deletePlace,
   getFavoritePlaceIds,
   getPlaceById,
+  listAllPlaces,
   listPlaces,
   listPublicPlaces,
+  listReviews,
+  restorePlace,
   setFavorite,
   updatePlaceStatus,
+  updateReviewStatus,
 } from "./db";
 
 const placeInput = z.object({
@@ -23,6 +28,7 @@ const placeInput = z.object({
   longitude: z.number().min(-180).max(180),
   hours: z.string().max(255).optional(),
   hasAblution: z.boolean().default(false),
+  hasWomenPrayer: z.boolean().default(false),
   hasParking: z.boolean().default(false),
   photos: z.string().optional(),
 });
@@ -39,14 +45,15 @@ export const appRouter = router({
   }),
   places: router({
     list: publicProcedure
-      .input(z.object({ search: z.string().optional(), openNow: z.boolean().optional(), hasAblution: z.boolean().optional(), hasParking: z.boolean().optional(), limit: z.number().int().min(1).max(20).default(20), offset: z.number().int().min(0).default(0) }).optional())
+      .input(z.object({ search: z.string().optional(), openNow: z.boolean().optional(), hasAblution: z.boolean().optional(), hasWomenPrayer: z.boolean().optional(), hasParking: z.boolean().optional(), limit: z.number().int().min(1).max(20).default(20), offset: z.number().int().min(0).default(0) }).optional())
       .query(async ({ input }) => {
         const rows = await listPublicPlaces();
         const search = input?.search?.trim().toLowerCase();
         const filtered = rows.filter((place) => {
           if (search && !`${place.name} ${place.nameEn ?? ""} ${place.address ?? ""}`.toLowerCase().includes(search)) return false;
-          if (input?.openNow && place.status !== "approved") return false;
+          if (input?.openNow && !place.hours?.includes("مفتوح") && !place.hours?.toLowerCase().includes("open")) return false;
           if (input?.hasAblution && !place.hasAblution) return false;
+          if (input?.hasWomenPrayer && !place.hasWomenPrayer) return false;
           if (input?.hasParking && !place.hasParking) return false;
           return true;
         });
@@ -68,9 +75,14 @@ export const appRouter = router({
   }),
   admin: router({
     pendingPlaces: adminProcedure.query(() => listPlaces("pending")),
+    allPlaces: adminProcedure.query(() => listAllPlaces()),
+    reviews: adminProcedure.query(() => listReviews()),
     setPlaceStatus: adminProcedure.input(z.object({ placeId: z.number().int().positive(), status: z.enum(["approved", "rejected"]) })).mutation(({ ctx, input }) =>
       updatePlaceStatus(input.placeId, input.status, ctx.user.id),
     ),
+    deletePlace: adminProcedure.input(z.object({ placeId: z.number().int().positive() })).mutation(({ ctx, input }) => deletePlace(input.placeId, ctx.user.id)),
+    restorePlace: adminProcedure.input(z.object({ placeId: z.number().int().positive() })).mutation(({ ctx, input }) => restorePlace(input.placeId, ctx.user.id)),
+    setReviewStatus: adminProcedure.input(z.object({ reviewId: z.number().int().positive(), status: z.enum(["visible", "hidden", "reported"]) })).mutation(({ input }) => updateReviewStatus(input.reviewId, input.status)),
   }),
 });
 

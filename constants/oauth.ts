@@ -121,9 +121,9 @@ export async function startOAuthLogin(): Promise<string | null> {
   try {
     // Android browsers can handle HTTPS OAuth URLs even when canOpenURL is unreliable.
     await Linking.openURL(loginUrl);
-  } catch {
+  } catch (error) {
     console.error("[OAuth] Failed to open login URL");
-    // 可考虑抛出错误让调用方处理
+    throw error instanceof Error ? error : new Error("Unable to open the sign-in page");
   }
 
   // The OAuth callback will reopen the app via deep link.
