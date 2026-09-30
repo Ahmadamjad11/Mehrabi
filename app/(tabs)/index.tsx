@@ -45,60 +45,35 @@ type Place = {
   lng: number;
 };
 
-const PLACES: Place[] = [
-  {
-    id: "1",
-    name: "مسجد الملك عبدالله",
-    type: "مسجد",
-    distance: "650 م",
-    drive: "8 د",
-    open: true,
-    ablution: true,
-    parking: true,
-    lat: 31.9632,
-    lng: 35.9106,
-  },
-  {
-    id: "2",
-    name: "مصلى محطة الواحة",
-    type: "مصلى محطة وقود",
-    distance: "1.1 كم",
-    drive: "10 د",
-    open: true,
-    ablution: true,
-    parking: true,
-    lat: 31.9721,
-    lng: 35.9162,
-  },
-  {
-    id: "3",
-    name: "مصلى تاج مول",
-    type: "مصلى مول",
-    distance: "1.8 كم",
-    drive: "13 د",
-    open: false,
-    ablution: true,
-    parking: true,
-    lat: 31.986,
-    lng: 35.897,
-  },
-];
+const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: number; lng: number }) => {
+  if (!from) return "حدد موقعك";
+  const earthRadiusKm = 6371;
+  const dLat = ((to.lat - from.lat) * Math.PI) / 180;
+  const dLng = ((to.lng - from.lng) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((from.lat * Math.PI) / 180) * Math.cos((to.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  const distanceKm = earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} م` : `${distanceKm.toFixed(1)} كم`;
+};
 
-const OSM_HTML = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0;background:#e3efef} .leaflet-control-attribution{font-size:8px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map',{zoomControl:false}).setView([31.975,35.91],13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);const points=[[31.9632,35.9106,'مسجد الملك عبدالله'],[31.9721,35.9162,'مصلى محطة الواحة'],[31.986,35.897,'مصلى تاج مول']];points.forEach(([lat,lng,name])=>L.marker([lat,lng]).addTo(map).bindPopup(name));</script></body></html>`;
+const createOsmHtml = (places: Place[]) => {
+  const points = JSON.stringify(places.map((place) => [place.lat, place.lng, place.name]));
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0;background:#e3efef} .leaflet-control-attribution{font-size:8px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map',{zoomControl:false}).setView([31.975,35.91],13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);const points=${points};points.forEach(([lat,lng,name])=>L.marker([lat,lng]).addTo(map).bindPopup(name));</script></body></html>`;
+};
 
 export default function HomeScreen() {
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("الأقرب أولًا");
   const [favorites, setFavorites] = useState<string[]>([]);
   const [locationEnabled, setLocationEnabled] = useState(false);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [language, setLanguage] = useState<"ar" | "en">("ar");
-  const placesQuery = trpc.places.list.useQuery(undefined, { staleTime: 60_000 });
+  const placesQuery = trpc.places.list.useQuery({}, { staleTime: 60_000, retry: 2 });
 
   const apiPlaces: Place[] = (placesQuery.data ?? []).map((place) => ({
     id: String(place.id),
     name: place.name,
     type: place.type === "mosque" ? "مسجد" : place.type === "mall" ? "مصلى مول" : place.type === "station" ? "مصلى محطة" : "مصلى",
-    distance: "—",
+    distance: formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }),
     drive: "—",
     open: true,
     ablution: place.hasAblution,
@@ -106,7 +81,7 @@ export default function HomeScreen() {
     lat: place.latitude,
     lng: place.longitude,
   }));
-  const sourcePlaces = apiPlaces.length > 0 ? apiPlaces : PLACES;
+  const sourcePlaces = apiPlaces;
 
   const filteredPlaces = useMemo(() => {
     let result = sourcePlaces.filter((place) =>
@@ -138,6 +113,8 @@ export default function HomeScreen() {
       Alert.alert("نحتاج موقعك", "يمكنك استخدام البحث اليدوي بدلًا من ذلك، أو تفعيل الموقع من إعدادات الهاتف.");
       return;
     }
+    const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
     setLocationEnabled(true);
   };
 
@@ -231,7 +208,7 @@ export default function HomeScreen() {
         </ScrollView>
 
         <View style={styles.mapCard}>
-          {Platform.OS !== "web" ? <WebView source={{ html: OSM_HTML }} style={styles.nativeMap} originWhitelist={["*"]} javaScriptEnabled /> : null}
+          {Platform.OS !== "web" ? <WebView source={{ html: createOsmHtml(sourcePlaces) }} style={styles.nativeMap} originWhitelist={["*"]} javaScriptEnabled /> : null}
           <View style={styles.mapHeader}><Text style={styles.mapBadge}>موقعك الآن</Text><Text style={styles.mapProvider}>OpenStreetMap</Text></View>
           {Platform.OS === "web" ? <><View style={[styles.mapRoad, styles.roadOne]} /><View style={[styles.mapRoad, styles.roadTwo]} /><View style={[styles.mapRoad, styles.roadThree]} /><View style={styles.mapWater} /><View style={[styles.mapPin, { top: 52, right: 78 }]}><Ionicons name="location" size={28} color={COLORS.navy} /><View style={styles.pinNumber}><Text style={styles.pinNumberText}>1</Text></View></View><View style={[styles.mapPin, { top: 101, right: 178 }]}><Ionicons name="location" size={28} color={COLORS.teal} /><View style={styles.pinNumber}><Text style={styles.pinNumberText}>2</Text></View></View><View style={[styles.mapPin, { top: 153, right: 112 }]}><Ionicons name="location" size={28} color={COLORS.gold} /><View style={styles.pinNumber}><Text style={styles.pinNumberText}>3</Text></View></View><View style={styles.currentLocation}><View style={styles.currentDot} /></View></> : null}
           <Pressable style={styles.mapControl} onPress={() => setLocationEnabled(true)}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
