@@ -1,11 +1,22 @@
 import { ONE_YEAR_MS } from "../../shared/const.js";
 import type { Express, Request, Response } from "express";
-import { getUserByOpenId, upsertUser } from "../db";
+import { getUserByOpenId, revokeSessionToken, upsertUser } from "../db";
 import {
   getSessionCookieName,
   getSessionCookieOptions,
 } from "./cookies";
 import { sdk } from "./sdk";
+
+function presentedSessionToken(req: Request) {
+  const authHeader = req.headers.authorization || req.headers.Authorization;
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice("Bearer ".length).trim();
+  }
+  const cookieHeader = req.headers.cookie ?? "";
+  const cookieName = getSessionCookieName(req);
+  const cookie = cookieHeader.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${cookieName}=`));
+  return cookie?.slice(cookieName.length + 1);
+}
 
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
@@ -146,12 +157,16 @@ export function registerOAuthRoutes(app: Express) {
   });
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
-    const cookieOptions = getSessionCookieOptions(req);
-    res.clearCookie(getSessionCookieName(req), {
-      ...cookieOptions,
-      maxAge: -1,
-    });
-    res.json({ success: true });
+    void (async () => {
+      const token = presentedSessionToken(req);
+      if (token) await revokeSessionToken(token);
+      const cookieOptions = getSessionCookieOptions(req);
+      res.clearCookie(getSessionCookieName(req), {
+        ...cookieOptions,
+        maxAge: -1,
+      });
+      res.json({ success: true });
+    })().catch(() => res.status(503).json({ error: "Unable to revoke session" }));
   });
 
   // Get current authenticated user - works with both cookie (web) and Bearer token (mobile)

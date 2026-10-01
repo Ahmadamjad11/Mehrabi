@@ -1,6 +1,17 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { favorites, InsertPlace, InsertUser, places, reviews, User, users } from "../drizzle/schema";
+import { createHash } from "node:crypto";
+import {
+  authTokens,
+  favorites,
+  InsertPlace,
+  InsertUser,
+  places,
+  reviews,
+  sessionRevocations,
+  User,
+  users,
+} from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -87,6 +98,96 @@ export async function getUserByOpenId(openId: string) {
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserByEmail(email: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  return result[0];
+}
+
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result[0];
+}
+
+export async function createEmailUser(input: {
+  openId: string;
+  name: string;
+  email: string;
+  passwordHash: string;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.insert(users).values({
+    openId: input.openId,
+    name: input.name,
+    email: input.email,
+    loginMethod: "email",
+    passwordHash: input.passwordHash,
+    lastSignedIn: new Date(),
+  });
+  return Number(result[0].insertId);
+}
+
+export async function markUserEmailVerified(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(users).set({ emailVerifiedAt: new Date() }).where(eq(users.id, userId));
+}
+
+export async function updateUserPassword(userId: number, passwordHash: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(users).set({ passwordHash }).where(eq(users.id, userId));
+}
+
+export async function createAuthToken(input: {
+  userId: number;
+  tokenHash: string;
+  type: "email_verification" | "password_reset";
+  expiresAt: Date;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.insert(authTokens).values(input);
+}
+
+export async function getActiveAuthToken(tokenHash: string, type: "email_verification" | "password_reset") {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db
+    .select()
+    .from(authTokens)
+    .where(and(eq(authTokens.tokenHash, tokenHash), eq(authTokens.type, type), isNull(authTokens.usedAt), gt(authTokens.expiresAt, new Date())))
+    .limit(1);
+  return result[0];
+}
+
+export async function markAuthTokenUsed(tokenId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(authTokens).set({ usedAt: new Date() }).where(eq(authTokens.id, tokenId));
+}
+
+export function hashSessionToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export async function revokeSessionToken(token: string, expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.insert(sessionRevocations).values({ tokenHash: hashSessionToken(token), expiresAt }).onDuplicateKeyUpdate({ set: { expiresAt } });
+}
+
+export async function isSessionRevoked(token: string) {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db.select({ tokenHash: sessionRevocations.tokenHash }).from(sessionRevocations).where(and(eq(sessionRevocations.tokenHash, hashSessionToken(token)), gt(sessionRevocations.expiresAt, new Date()))).limit(1);
+  return result.length > 0;
 }
 
 export async function listPlaces(status: "approved" | "pending" | "rejected" | "deleted" = "approved") {

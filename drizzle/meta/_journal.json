@@ -29,6 +29,20 @@
       "when": 1790781721000,
       "tag": "0003_add_deleted_status",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1790879885520,
+      "tag": "0004_sleepy_forgotten_one",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1790895045416,
+      "tag": "0005_silly_the_anarchist",
+      "breakpoints": true
     }
   ]
 }

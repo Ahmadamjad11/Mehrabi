@@ -16,10 +16,28 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  emailVerifiedAt: timestamp("emailVerifiedAt"),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+});
+
+export const authTokens = mysqlTable("auth_tokens", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  tokenHash: varchar("tokenHash", { length: 128 }).notNull().unique(),
+  type: mysqlEnum("type", ["email_verification", "password_reset"]).notNull(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  usedAt: timestamp("usedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const sessionRevocations = mysqlTable("session_revocations", {
+  tokenHash: varchar("tokenHash", { length: 128 }).primaryKey(),
+  expiresAt: timestamp("expiresAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
 export const places = mysqlTable("places", {
@@ -69,6 +87,8 @@ export const reviews = mysqlTable("reviews", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+export type AuthToken = typeof authTokens.$inferSelect;
+export type SessionRevocation = typeof sessionRevocations.$inferSelect;
 export type Place = typeof places.$inferSelect;
 export type InsertPlace = typeof places.$inferInsert;
 export type Review = typeof reviews.$inferSelect;

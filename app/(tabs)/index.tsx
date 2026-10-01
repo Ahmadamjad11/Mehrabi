@@ -21,7 +21,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { trpc } from "@/lib/trpc";
-import { startOAuthLogin } from "@/constants/oauth";
+import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
+import * as Auth from "@/lib/_core/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const COLORS = {
@@ -123,6 +124,7 @@ export default function HomeScreen() {
   const [language, setLanguage] = useState<"ar" | "en">("ar");
   const [now, setNow] = useState(() => new Date());
   const [compassHeading, setCompassHeading] = useState(0);
+  const [headingReady, setHeadingReady] = useState(false);
   const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
@@ -141,16 +143,24 @@ export default function HomeScreen() {
   const [reviewRating, setReviewRating] = useState(5);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [emailAuthVisible, setEmailAuthVisible] = useState(false);
+  const [emailAuthMode, setEmailAuthMode] = useState<"login" | "register" | "forgot">("login");
+  const [emailAuthName, setEmailAuthName] = useState("");
+  const [emailAuthEmail, setEmailAuthEmail] = useState("");
+  const [emailAuthPassword, setEmailAuthPassword] = useState("");
+  const [emailAuthBusy, setEmailAuthBusy] = useState(false);
+  const [emailAuthError, setEmailAuthError] = useState<string | null>(null);
+  const [emailAuthMessage, setEmailAuthMessage] = useState<string | null>(null);
+  const [emailAuthCanResend, setEmailAuthCanResend] = useState(false);
   const ui = language === "ar" ? {
     greeting: "صباح الخير ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
-    nearby: "أماكن الصلاة القريبة منك", search: "ابحث عن مسجد، مصلى أو منطقة...", mapLocation: "موقعك الآن", all: "عرض القائمة", mosques: "المساجد", musallas: "المصليات", open: "مفتوح الآن", ablution: "يوجد وضوء", women: "مصلى نساء", nearest: "الأقرب أولًا", verified: "متحقق", unverified: "غير متحقق منه", unknownHours: "الساعات غير معروفة",
-    go: "اذهب", add: "أضف مكانًا تعرفه", home: "الرئيسية", explore: "استكشف", qibla: "القبلة", account: "حسابي", prayerPrefix: "صلاة", prayerHint: "لا تفوّت الصلاة أينما كنت", listTitle: "القائمة", listHint: "أنت تشاهد جميع الأماكن القريبة.", exploreTitle: "استكشف أماكن الصلاة", exploreHint: "ابحث وفلتر الأماكن حسب النوع والخدمات، والنتائج مرتبة من الأقرب.", accountTitle: "حسابي", accountHint: "سجّل الدخول لإضافة مكان وكتابة التقييمات.", login: "تسجيل الدخول", admin: "فتح لوحة الإدارة", addTitle: "إضافة مكان جديد", selectLocation: "حدد موقع المكان", placeData: "بيانات المكان", pickerHint: "اضغط على الخريطة لوضع الدبوس بدقة، أو استخدم موقعك الحالي.", useCurrentLocation: "استخدم موقعي الحالي", locationCorrect: "الموقع صحيح، متابعة", editLocation: "تعديل الموقع", namePlaceholder: "اسم المسجد أو المصلى", addressPlaceholder: "العنوان أو المنطقة", hoursPlaceholder: "ساعات العمل أو غير معروفة", buildingPlaceholder: "اسم المبنى (اختياري)", floorPlaceholder: "الطابق (اختياري)", submit: "إرسال للمراجعة", submitting: "جاري الإرسال...", editPlace: "المكان", parking: "مواقف", reviewTitle: "أضف تقييمك", reviewPlaceholder: "اكتب تعليقًا (اختياري)", publishReview: "نشر التقييم", loadMore: "تحميل 20 مكانًا إضافيًا", nearbyCount: "أماكن قريبة",
+    go: "اذهب", add: "أضف مكانًا تعرفه", home: "الرئيسية", explore: "استكشف", qibla: "القبلة", account: "حسابي", prayerPrefix: "صلاة", prayerHint: "لا تفوّت الصلاة أينما كنت", listTitle: "القائمة", listHint: "أنت تشاهد جميع الأماكن القريبة.", exploreTitle: "استكشف أماكن الصلاة", exploreHint: "ابحث وفلتر الأماكن حسب النوع والخدمات، والنتائج مرتبة من الأقرب.", accountTitle: "حسابي", accountHint: "سجّل الدخول لإضافة مكان وكتابة التقييمات.", login: "تسجيل الدخول", logout: "تسجيل الخروج", emailLogin: "الدخول بالبريد الإلكتروني", emailRegister: "إنشاء حساب بالبريد", email: "البريد الإلكتروني", password: "كلمة المرور", name: "الاسم", forgotPassword: "نسيت كلمة المرور؟", sendReset: "إرسال رابط الاستعادة", resendVerification: "إعادة إرسال رسالة التأكيد", createAccount: "إنشاء الحساب", haveAccount: "لديك حساب؟ تسجيل الدخول", backToLogin: "العودة لتسجيل الدخول", verifyHint: "افحص بريدك واضغط رابط التأكيد قبل تسجيل الدخول.", resetSent: "إذا كان البريد مسجلًا فستصلك رسالة الاستعادة قريبًا.", verifySent: "تم إنشاء الحساب. افحص بريدك لتأكيد الحساب.", admin: "فتح لوحة الإدارة", addTitle: "إضافة مكان جديد", selectLocation: "حدد موقع المكان", placeData: "بيانات المكان", pickerHint: "اضغط على الخريطة لوضع الدبوس بدقة، أو استخدم موقعك الحالي.", useCurrentLocation: "استخدم موقعي الحالي", locationCorrect: "الموقع صحيح، متابعة", editLocation: "تعديل الموقع", namePlaceholder: "اسم المسجد أو المصلى", addressPlaceholder: "العنوان أو المنطقة", hoursPlaceholder: "ساعات العمل أو غير معروفة", buildingPlaceholder: "اسم المبنى (اختياري)", floorPlaceholder: "الطابق (اختياري)", submit: "إرسال للمراجعة", submitting: "جاري الإرسال...", editPlace: "المكان", parking: "مواقف", reviewTitle: "أضف تقييمك", reviewPlaceholder: "اكتب تعليقًا (اختياري)", publishReview: "نشر التقييم", loadMore: "تحميل 20 مكانًا إضافيًا", nearbyCount: "أماكن قريبة",
   } : {
     greeting: "Good morning ✦", title: "Where will you pray today?", useLocation: "Use my location", located: "Location detected",
     nextPrayer: "Next prayer ✦", today: "Today", remaining: "remaining", prayerTimes: "Today's times", guide: "Your guide on the way",
     nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
-    go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
+    go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", logout: "Sign out", emailLogin: "Sign in with email", emailRegister: "Create account with email", email: "Email", password: "Password", name: "Name", forgotPassword: "Forgot password?", sendReset: "Send reset link", resendVerification: "Resend confirmation email", createAccount: "Create account", haveAccount: "Already have an account? Sign in", backToLogin: "Back to sign in", verifyHint: "Check your inbox and tap the confirmation link before signing in.", resetSent: "If this email is registered, you will receive a reset link shortly.", verifySent: "Account created. Check your inbox to confirm it.", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
   };
   const filterOptions = [
     { key: "nearest", label: ui.nearest },
@@ -159,19 +169,43 @@ export default function HomeScreen() {
     { key: "women", label: ui.women },
     { key: "favorites", label: language === "ar" ? "المفضلة" : "Favorites" },
   ];
-  const placesQuery = trpc.places.list.useQuery({ search: query.trim() || undefined, limit: 20, offset: placeOffset }, { staleTime: 60_000, retry: 2 });
+  const serverPlaceFilters = {
+    search: query.trim() || undefined,
+    openNow: activeFilter === "open" ? true : undefined,
+    hasAblution: activeFilter === "ablution" ? true : undefined,
+    hasWomenPrayer: activeFilter === "women" ? true : undefined,
+    hasParking: undefined,
+    limit: 20,
+    offset: placeOffset,
+  };
+  const placesQuery = trpc.places.list.useQuery(serverPlaceFilters, { staleTime: 60_000, retry: 2 });
   const meQuery = trpc.auth.me.useQuery();
+  const nearestPlaces = trpc.places.nearest.useMutation();
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
 
   useEffect(() => {
-    // Reset the cursor and accumulated server pages when the search key changes.
+    // Reset the cursor and accumulated server pages when the search/filter key changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPlaceOffset(0);
     setLoadedApiPlaces([]);
-  }, [query]);
+  }, [activeFilter, query]);
 
   useEffect(() => {
+    if (activeFilter !== "nearest" || !userLocation) return;
+    nearestPlaces.mutate({
+      latitude: userLocation.lat,
+      longitude: userLocation.lng,
+      search: query.trim() || undefined,
+      limit: 20,
+      offset: placeOffset,
+    });
+    // Coordinates are sent only for this explicit nearest request and never persisted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFilter, placeOffset, query, userLocation?.lat, userLocation?.lng]);
+
+  useEffect(() => {
+    if (activeFilter === "nearest" && userLocation) return;
     if (!placesQuery.data) return;
     // Synchronize the accumulated view with the latest server page.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -180,7 +214,17 @@ export default function HomeScreen() {
       const known = new Set(current.map((place) => place.id));
       return [...current, ...placesQuery.data.filter((place) => !known.has(place.id))];
     });
-  }, [placeOffset, placesQuery.data]);
+  }, [activeFilter, placeOffset, placesQuery.data, userLocation]);
+
+  useEffect(() => {
+    if (activeFilter !== "nearest" || !nearestPlaces.data) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoadedApiPlaces((current) => {
+      if (placeOffset === 0) return nearestPlaces.data;
+      const known = new Set(current.map((place) => place.id));
+      return [...current, ...nearestPlaces.data.filter((place) => !known.has(place.id))];
+    });
+  }, [activeFilter, nearestPlaces.data, placeOffset]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -237,7 +281,10 @@ export default function HomeScreen() {
     Location.watchHeadingAsync((heading) => {
       // trueHeading is corrected for magnetic declination when available.
       const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
-      if (Number.isFinite(value)) setCompassHeading((value + 360) % 360);
+      if (Number.isFinite(value)) {
+        setCompassHeading((value + 360) % 360);
+        setHeadingReady(true);
+      }
     }).then((next) => { subscription = next; }).catch(() => {
       // Some devices do not expose a compass; the UI will keep showing the fixed true bearing.
     });
@@ -326,7 +373,105 @@ export default function HomeScreen() {
     }
   };
 
+  const openEmailAuth = (mode: "login" | "register" | "forgot") => {
+    setEmailAuthMode(mode);
+    setEmailAuthError(null);
+    setEmailAuthMessage(null);
+    setEmailAuthCanResend(false);
+    setEmailAuthVisible(true);
+  };
+
+  const submitEmailAuth = async () => {
+    setEmailAuthBusy(true);
+    setEmailAuthError(null);
+    setEmailAuthMessage(null);
+    try {
+      const endpoint = emailAuthMode === "register" ? "register" : emailAuthMode === "forgot" ? "forgot-password" : "login";
+      const body = emailAuthMode === "register"
+        ? { name: emailAuthName, email: emailAuthEmail, password: emailAuthPassword }
+        : emailAuthMode === "forgot"
+          ? { email: emailAuthEmail }
+          : { email: emailAuthEmail, password: emailAuthPassword };
+      const response = await fetch(`${getApiBaseUrl()}/api/auth/email/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-client-platform": Platform.OS === "web" ? "web" : "native" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string; app_session_id?: string; code?: string };
+      if (!response.ok) {
+        if (payload.code === "EMAIL_NOT_VERIFIED") {
+          setEmailAuthCanResend(true);
+          throw new Error(ui.verifyHint);
+        }
+        throw new Error(payload.error || (language === "ar" ? "تعذر إكمال العملية." : "Unable to complete the request."));
+      }
+      if (emailAuthMode === "login") {
+        if (payload.app_session_id) await Auth.setSessionToken(payload.app_session_id);
+        await meQuery.refetch();
+        setEmailAuthVisible(false);
+      } else if (emailAuthMode === "register") {
+        setEmailAuthMode("login");
+        setEmailAuthMessage(ui.verifySent);
+      } else {
+        setEmailAuthMessage(ui.resetSent);
+      }
+    } catch (error) {
+      setEmailAuthError(error instanceof Error ? error.message : (language === "ar" ? "تعذر إكمال العملية." : "Unable to complete the request."));
+    } finally {
+      setEmailAuthBusy(false);
+    }
+  };
+
+  const resendVerification = async () => {
+    setEmailAuthBusy(true);
+    setEmailAuthError(null);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/auth/email/resend-verification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: emailAuthEmail }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string };
+      if (!response.ok) throw new Error(payload.error || (language === "ar" ? "تعذر إرسال الرسالة." : "Unable to send the email."));
+      setEmailAuthMessage(payload.message || ui.verifySent);
+      setEmailAuthCanResend(false);
+    } catch (error) {
+      setEmailAuthError(error instanceof Error ? error.message : (language === "ar" ? "تعذر إرسال الرسالة." : "Unable to send the email."));
+    } finally {
+      setEmailAuthBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      const token = await Auth.getSessionToken();
+      await fetch(`${getApiBaseUrl()}/api/auth/logout`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+      });
+    } finally {
+      await Auth.removeSessionToken();
+      await Auth.clearUserInfo();
+      await meQuery.refetch();
+    }
+  };
+
+  const placeGroups: { groupTitle: string; groupPlaces: Place[] }[] = [
+    { groupTitle: ui.mosques ?? "", groupPlaces: mosques },
+    { groupTitle: ui.musallas ?? "", groupPlaces: musallas },
+  ];
+  const canLoadMore = activeFilter === "nearest" && userLocation
+    ? nearestPlaces.data?.length === 20
+    : placesQuery.data?.length === 20;
+
   const openAddPlace = () => {
+    if (!meQuery.data) {
+      openEmailAuth("login");
+      return;
+    }
     setSubmitError(null);
     setAddStep(1);
     setAddFormVisible(true);
@@ -428,12 +573,9 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.listHeader}><Text style={styles.nearbyCount}>{filteredPlaces.length} {ui.nearbyCount}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
-        {[
-          [ui.mosques, mosques],
-          [ui.musallas, musallas],
-        ].map(([groupTitle, groupPlaces]) => groupPlaces.length > 0 && <View key={groupTitle as string}>
-          <Text style={styles.groupTitle}>{groupTitle as string}</Text>
-          {(groupPlaces as Place[]).map((place) => (
+        {placeGroups.map(({ groupTitle, groupPlaces }) => groupPlaces.length > 0 && <View key={groupTitle}>
+          <Text style={styles.groupTitle}>{groupTitle}</Text>
+          {groupPlaces.map((place) => (
           <View key={place.id} style={styles.placeCard}>
             <View style={styles.placeMain}>
               <View style={styles.placeIcon}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={COLORS.navy} /></View>
@@ -453,7 +595,7 @@ export default function HomeScreen() {
           ))}
         </View>)}
 
-        {placesQuery.data?.length === 20 && <Pressable style={styles.loadMoreButton} onPress={() => setPlaceOffset((current) => current + 20)}><Text style={styles.loadMoreText}>{ui.loadMore}</Text></Pressable>}
+        {canLoadMore && <Pressable style={styles.loadMoreButton} onPress={() => setPlaceOffset((current) => current + 20)}><Text style={styles.loadMoreText}>{ui.loadMore}</Text></Pressable>}
 
         <Pressable style={styles.addPlaceButton} onPress={openAddPlace}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
         <View style={styles.bottomSpace} />
@@ -480,17 +622,40 @@ export default function HomeScreen() {
               </View>
               <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View></View>
               <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي بدقة" : "Calculated precisely from your current location") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
-              <Text style={styles.calibrationHint}>{language === "ar" ? "للمعايرة: حرّك الهاتف على شكل رقم 8 وأبعده عن المعادن." : "For calibration, move the phone in a figure eight away from metal."}</Text>
+              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? "البوصلة جاهزة" : "Compass ready") : (language === "ar" ? "بانتظار الموقع والبوصلة" : "Waiting for location and compass")}</Text></View>
               {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
               <Text style={styles.modalTitle}>{ui.accountTitle}</Text>
               <Text style={styles.modalHint}>{meQuery.data ? (language === "ar" ? `مرحبًا ${meQuery.data.name || "بك"}` : `Welcome ${meQuery.data.name || ""}`) : ui.accountHint}</Text>
-              {!meQuery.data && <Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{ui.login}</Text></Pressable>}
+              {!meQuery.data && <>
+                <Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{ui.login}</Text></Pressable>
+                <Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("login")}><Text style={styles.secondaryModalText}>{ui.emailLogin}</Text></Pressable>
+              </>}
               {meQuery.data?.role === "admin" && <Pressable style={styles.adminLink} onPress={() => { setActiveTab("home"); router.push({ pathname: "/admin" } as never); }}><Text style={styles.adminLinkText}>{ui.admin}</Text></Pressable>}
+              {meQuery.data && <Pressable style={styles.secondaryModalButton} onPress={signOut}><Text style={styles.secondaryModalText}>{ui.logout}</Text></Pressable>}
             </>}
           </View>
         </View>
+      </Modal>
+      <Modal visible={emailAuthVisible} animationType="slide" transparent onRequestClose={() => setEmailAuthVisible(false)}>
+        <View style={styles.modalBackdrop}><View style={styles.modalCard}>
+          <Pressable style={styles.modalClose} onPress={() => setEmailAuthVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
+          <Text style={styles.modalTitle}>{emailAuthMode === "register" ? ui.emailRegister : emailAuthMode === "forgot" ? ui.forgotPassword : ui.emailLogin}</Text>
+          {emailAuthMode === "register" && <TextInput value={emailAuthName} onChangeText={setEmailAuthName} placeholder={ui.name} style={styles.formInput} textAlign="right" autoCapitalize="words" />}
+          <TextInput value={emailAuthEmail} onChangeText={setEmailAuthEmail} placeholder={ui.email} style={styles.formInput} textAlign="right" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+          {emailAuthMode !== "forgot" && <TextInput value={emailAuthPassword} onChangeText={setEmailAuthPassword} placeholder={ui.password} style={styles.formInput} textAlign="right" secureTextEntry autoCapitalize="none" />}
+          {emailAuthMessage && <Text style={styles.formSuccess}>{emailAuthMessage}</Text>}
+          {emailAuthError && <Text style={styles.formError}>{emailAuthError}</Text>}
+          <Pressable style={styles.primaryModalButton} disabled={emailAuthBusy} onPress={submitEmailAuth}><Text style={styles.primaryModalText}>{emailAuthBusy ? (language === "ar" ? "جاري المعالجة..." : "Working...") : emailAuthMode === "register" ? ui.createAccount : emailAuthMode === "forgot" ? ui.sendReset : ui.login}</Text></Pressable>
+          {emailAuthCanResend && <Pressable style={styles.authLink} disabled={emailAuthBusy} onPress={resendVerification}><Text style={styles.authLinkText}>{ui.resendVerification}</Text></Pressable>}
+          {emailAuthMode === "login" && <>
+            <Pressable style={styles.authLink} onPress={() => openEmailAuth("forgot")}><Text style={styles.authLinkText}>{ui.forgotPassword}</Text></Pressable>
+            <Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("register")}><Text style={styles.secondaryModalText}>{ui.emailRegister}</Text></Pressable>
+          </>}
+          {emailAuthMode === "register" && <Pressable style={styles.authLink} onPress={() => openEmailAuth("login")}><Text style={styles.authLinkText}>{ui.haveAccount}</Text></Pressable>}
+          {emailAuthMode === "forgot" && <Pressable style={styles.authLink} onPress={() => openEmailAuth("login")}><Text style={styles.authLinkText}>{ui.backToLogin}</Text></Pressable>}
+        </View></View>
       </Modal>
       <Modal visible={addFormVisible} animationType="slide" transparent onRequestClose={() => setAddFormVisible(false)}>
         <View style={styles.modalBackdrop}><View style={styles.modalCard}>
@@ -653,6 +818,11 @@ const styles = StyleSheet.create({
   qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
   qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
   qiblaStatLabel: { color: COLORS.muted, fontSize: 10, textAlign: "center", marginTop: 2 },
+  compassStatus: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, marginBottom: 4 },
+  compassStatusDot: { width: 8, height: 8, borderRadius: 4 },
+  compassStatusReady: { backgroundColor: COLORS.green },
+  compassStatusWaiting: { backgroundColor: COLORS.gold },
+  compassStatusText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   primaryModalButton: { height: 46, borderRadius: 13, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
   primaryModalText: { color: COLORS.white, fontSize: 13, fontWeight: "800" },
   calibrationHint: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "center", marginBottom: 3 },
@@ -667,6 +837,9 @@ const styles = StyleSheet.create({
   formInput: { height: 48, borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 12, color: COLORS.ink, marginBottom: 10, backgroundColor: COLORS.canvas },
   commentInput: { height: 90, paddingTop: 12, textAlignVertical: "top" },
   formError: { color: COLORS.red, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
+  formSuccess: { color: COLORS.green, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
+  authLink: { alignItems: "center", paddingVertical: 12 },
+  authLinkText: { color: COLORS.teal, fontSize: 12, fontWeight: "800" },
   ratingRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginVertical: 14 },
   typeRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 6 },
   typeButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },

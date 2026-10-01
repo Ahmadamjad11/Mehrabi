@@ -237,6 +237,10 @@ class SDKServer {
       throw ForbiddenError("Invalid session cookie");
     }
 
+    if (sessionCookie && await db.isSessionRevoked(sessionCookie)) {
+      throw ForbiddenError("Session has been revoked");
+    }
+
     if (session.openId.startsWith(CRON_OPEN_ID_PREFIX)) {
       const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
       const taskUid = userInfo.taskUid ?? null;
