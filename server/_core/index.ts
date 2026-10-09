@@ -23,6 +23,7 @@ async function startServer() {
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   registerEmailAuthRoutes(app);
+  app.get("/admin", (_req, res) => res.redirect(302, "/admin.html"));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, timestamp: Date.now() });
