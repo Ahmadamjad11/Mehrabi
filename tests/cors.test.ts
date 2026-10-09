@@ -181,6 +181,17 @@ describe("Mobile API origin and cookie isolation", () => {
     expect(native.headers.get("access-control-allow-origin")).toBeNull();
   });
 
+  it("allows credentialed requests from the exact API origin", async () => {
+    const base = await testServer(false, new Set());
+    const sameOrigin = await fetch(`${base}/write`, {
+      method: "POST",
+      headers: { Origin: base },
+    });
+    expect(sameOrigin.status).toBe(200);
+    expect(sameOrigin.headers.get("access-control-allow-origin")).toBe(base);
+    expect(sameOrigin.headers.get("access-control-allow-credentials")).toBe("true");
+  });
+
   it("keeps session cookies host-only across different sandbox API hosts", () => {
     for (const hostname of [
       "3000-sandbox-a.preview.example.test",

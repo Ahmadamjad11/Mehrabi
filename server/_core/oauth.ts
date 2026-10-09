@@ -23,6 +23,17 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function getFrontendOrigin(req: Request) {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto?.split(",")[0])?.trim() || req.protocol;
+  const host = req.get("host") || "localhost:8081";
+  const configured = process.env.EXPO_WEB_PREVIEW_URL || process.env.EXPO_PACKAGER_PROXY_URL;
+  if (/^3000-/.test(host) && configured) return configured.replace(/\/$/, "");
+  // Preview's API and web origins use paired 3000/8328 hostnames. Production uses
+  // one public origin for both static web and API, so OAuth must not redirect to localhost.
+  return `${protocol}://${host.replace(/^3000-/, "8328-")}`;
+}
+
 async function syncUser(userInfo: {
   openId?: string | null;
   name?: string | null;
@@ -110,10 +121,7 @@ export function registerOAuthRoutes(app: Express) {
 
       // Redirect to the paired Expo web origin. The session cookie remains host-only on
       // the API origin and is sent back by credentialed API requests.
-      const frontendUrl =
-        process.env.EXPO_WEB_PREVIEW_URL ||
-        process.env.EXPO_PACKAGER_PROXY_URL ||
-        "http://localhost:8081";
+      const frontendUrl = getFrontendOrigin(req);
       res.redirect(302, frontendUrl);
     } catch {
       console.error("[OAuth] Callback failed");

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { currentSessionCookie, getSessionCookieName, getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
@@ -71,6 +72,44 @@ function distanceMeters(latitude: number, longitude: number, targetLatitude: num
   return earthRadius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
 }
 
+function normalizePlaceName(value: string) {
+  return value
+    .toLocaleLowerCase("ar-JO")
+    .replace(/[ًٌٍَُِّْـ]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function namesLookSimilar(left: string, right: string) {
+  const a = normalizePlaceName(left);
+  const b = normalizePlaceName(right);
+  if (!a || !b) return false;
+  if (a === b || a.includes(b) || b.includes(a)) return true;
+  const aWords = new Set(a.split(" ").filter((word) => word.length > 1));
+  const bWords = new Set(b.split(" ").filter((word) => word.length > 1));
+  const sharedWords = [...aWords].filter((word) => bWords.has(word)).length;
+  return sharedWords >= 2 || (sharedWords === 1 && aWords.size === 1 && bWords.size === 1);
+}
+
+async function findDuplicatePlace(input: z.infer<typeof placeInput>) {
+  const existingPlaces = await listAllPlaces();
+  return existingPlaces
+    .filter((place) => place.status === "approved" || place.status === "pending")
+    .map((place) => ({ place, distance: distanceMeters(input.latitude, input.longitude, place.latitude, place.longitude) }))
+    .sort((a, b) => a.distance - b.distance)
+    .find(({ place, distance }) => {
+      // A very close pin is almost certainly the same physical place, even if
+      // two contributors used different spellings for its name.
+      if (distance <= 35) return true;
+      // At a wider radius require the same type and a similar name to avoid
+      // merging two genuinely different mosques in dense neighborhoods.
+      return distance <= 120 && place.type === input.type && namesLookSimilar(place.name, input.name);
+    });
+}
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -106,9 +145,17 @@ export const appRouter = router({
         .map(({ place }) => place);
     }),
     byId: publicProcedure.input(z.object({ id: z.number().int().positive() })).query(({ input }) => getPlaceById(input.id)),
-    submit: protectedProcedure.input(placeInput).mutation(({ ctx, input }) =>
-      createPlace({ ...input, status: "pending", createdBy: ctx.user.id }),
-    ),
+    submit: protectedProcedure.input(placeInput).mutation(async ({ ctx, input }) => {
+      const duplicate = await findDuplicatePlace(input);
+      if (duplicate) {
+        const statusText = duplicate.place.status === "pending" ? "قيد المراجعة" : "مضاف بالفعل";
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `هذا المكان ${statusText}: «${duplicate.place.name}»، ويبعد حوالي ${Math.max(1, Math.round(duplicate.distance))} متر. لم يتم إنشاء نسخة مكررة.`,
+        });
+      }
+      return createPlace({ ...input, status: "pending", createdBy: ctx.user.id });
+    }),
     favoriteIds: protectedProcedure.query(({ ctx }) => getFavoritePlaceIds(ctx.user.id)),
     setFavorite: protectedProcedure
       .input(z.object({ placeId: z.number().int().positive(), enabled: z.boolean() }))

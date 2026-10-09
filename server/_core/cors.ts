@@ -91,12 +91,19 @@ export function createCorsMiddleware(
       next();
       return;
     }
+    const forwardedProto = req.headers["x-forwarded-proto"];
+    const requestProto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto?.split(",")[0])?.trim() || req.protocol;
+    const requestOrigin = `${requestProto}://${req.get("host")}`;
+    // The published web app and API share one origin. Browsers still send an Origin
+    // header for credentialed POST requests, so same-origin requests must be accepted
+    // even when the platform does not inject EXPO_WEB_PREVIEW_URL in production.
+    const sameOrigin = origin === requestOrigin;
     const loopbackOrigin = originHasLoopbackHostname(origin);
     const allowedLocalOrigin =
       localApiRequest(req.hostname) && configuredLocalExpoWebOrigins().has(origin);
     const allowedConfiguredOrigin =
       !loopbackOrigin && allowedOrigins.has(origin);
-    if (!allowedConfiguredOrigin && !allowedLocalOrigin) {
+    if (!sameOrigin && !allowedConfiguredOrigin && !allowedLocalOrigin) {
       res.status(403).json({ error: "origin_not_allowed" });
       return;
     }

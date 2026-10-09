@@ -1,8 +1,10 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
 import * as Location from "expo-location";
+import * as Notifications from "expo-notifications";
+import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   AppState,
@@ -38,6 +40,9 @@ const COLORS = {
   goldSoft: "#FFF2D8",
   green: "#2B9A76",
   red: "#D46C66",
+  mosqueGreen: "#2B9A76",
+  musallaBlue: "#7C8EDB",
+  musallaSoft: "#EEF0FF",
 };
 
 type Place = {
@@ -66,13 +71,102 @@ const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: nu
   return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} م` : `${distanceKm.toFixed(1)} كم`;
 };
 
+const JORDAN_TIME_ZONE = "Asia/Amman";
+const REMINDER_SETTINGS_KEY = "maslay.prayer-reminders.v1";
+const REMINDER_IDS_KEY = "maslay.prayer-reminder-ids.v1";
+const PLACES_CACHE_KEY = "maslay.places-cache.v1";
+const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v2";
+const PRAYER_REMINDER_CATEGORY = "prayer_reminder";
+const PRAYER_DONE_ACTION = "prayer_done";
+const PRAYER_LATER_ACTION = "prayer_later";
+
+if (Notifications.setNotificationHandler) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
+  });
+}
+
+const configurePrayerNotifications = async () => {
+  if (Platform.OS === "web") return false;
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) {
+    const requested = await Notifications.requestPermissionsAsync();
+    if (!requested.granted) return false;
+  }
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync(PRAYER_REMINDER_CHANNEL, {
+      name: "تذكيرات الصلاة مع صوت",
+      importance: Notifications.AndroidImportance.DEFAULT,
+      vibrationPattern: [0, 250, 250, 250],
+      sound: "default",
+    });
+  }
+  await Notifications.setNotificationCategoryAsync(PRAYER_REMINDER_CATEGORY, [
+    // Foregrounding the app is required when it was killed; otherwise the
+    // response listener cannot receive the action on Android.
+    { identifier: PRAYER_DONE_ACTION, buttonTitle: "نعم، صليت", options: { opensAppToForeground: true } },
+    { identifier: PRAYER_LATER_ACTION, buttonTitle: "ذكّرني بعد 10 دقائق", options: { opensAppToForeground: true } },
+  ]);
+  return true;
+};
+
+const clearPrayerReminderSchedule = async () => {
+  // Also clear orphaned schedules from older builds/racing reschedules.
+  await Notifications.cancelAllScheduledNotificationsAsync();
+  const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
+  if (!stored) return;
+  const ids = JSON.parse(stored) as string[];
+  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
+  await AsyncStorage.removeItem(REMINDER_IDS_KEY);
+};
+
+const schedulePrayerReminders = async (minutesBefore: number, location: { lat: number; lng: number } | null) => {
+  if (Platform.OS === "web") return;
+  await clearPrayerReminderSchedule();
+  const now = new Date();
+  const ids: string[] = [];
+  for (let dayOffset = 0; dayOffset < 8; dayOffset += 1) {
+    const date = getJordanCalendarDate(new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000));
+    date.setDate(date.getDate() + dayOffset);
+    for (const [name, prayerTime] of getPrayerSchedule(date, location)) {
+      const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
+      if (triggerDate <= now) continue;
+      const id = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "تذكير من مصلاي",
+          body: `باقي ${minutesBefore} دقيقة على صلاة ${name}. هل صليت الصلاة السابقة؟`,
+          categoryIdentifier: PRAYER_REMINDER_CATEGORY,
+          data: { prayerName: name },
+        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
+      });
+      ids.push(id);
+    }
+  }
+  await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
+};
+
+const getJordanCalendarDate = (value: Date) => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: JORDAN_TIME_ZONE,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  }).formatToParts(value);
+  const getPart = (type: "year" | "month" | "day") => Number(parts.find((part) => part.type === type)?.value);
+  // Use midday to avoid an edge case where timezone conversion crosses midnight
+  // while adhan is constructing the day's solar calculations.
+  return new Date(getPart("year"), getPart("month") - 1, getPart("day"), 12, 0, 0, 0);
+};
+
 const getPrayerSchedule = (now: Date, location: { lat: number; lng: number } | null) => {
   const params = CalculationMethod.MuslimWorldLeague();
   params.madhab = Madhab.Shafi;
-  const times = new PrayerTimes(new Coordinates(location?.lat ?? 31.9539, location?.lng ?? 35.9106), now, params);
+  const jordanDate = getJordanCalendarDate(now);
+  const times = new PrayerTimes(new Coordinates(location?.lat ?? 31.9539, location?.lng ?? 35.9106), jordanDate, params);
   return [
     ["الفجر", times.fajr],
-    [now.getDay() === 5 ? "الجمعة" : "الظهر", times.dhuhr],
+    [jordanDate.getDay() === 5 ? "الجمعة" : "الظهر", times.dhuhr],
     ["العصر", times.asr],
     ["المغرب", times.maghrib],
     ["العشاء", times.isha],
@@ -80,7 +174,7 @@ const getPrayerSchedule = (now: Date, location: { lat: number; lng: number } | n
 };
 
 const formatClock = (date: Date, language: "ar" | "en") =>
-  date.toLocaleTimeString(language === "ar" ? "ar-JO" : "en-US", { hour: "numeric", minute: "2-digit" });
+  date.toLocaleTimeString(language === "ar" ? "ar-JO" : "en-US", { hour: "numeric", minute: "2-digit", timeZone: JORDAN_TIME_ZONE });
 
 const localizePrayerName = (name: string, language: "ar" | "en") => {
   if (language === "ar") return name;
@@ -117,6 +211,7 @@ export default function HomeScreen() {
   const [query, setQuery] = useState("");
   const [placeOffset, setPlaceOffset] = useState(0);
   const [loadedApiPlaces, setLoadedApiPlaces] = useState<any[]>([]);
+  const [usingCachedPlaces, setUsingCachedPlaces] = useState(false);
   const [activeFilter, setActiveFilter] = useState("nearest");
   const [favorites, setFavorites] = useState<string[]>([]);
   const [locationEnabled, setLocationEnabled] = useState(false);
@@ -125,6 +220,7 @@ export default function HomeScreen() {
   const [now, setNow] = useState(() => new Date());
   const [compassHeading, setCompassHeading] = useState(0);
   const [headingReady, setHeadingReady] = useState(false);
+  const headingStreamRef = useRef(false);
   const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
@@ -152,6 +248,11 @@ export default function HomeScreen() {
   const [emailAuthError, setEmailAuthError] = useState<string | null>(null);
   const [emailAuthMessage, setEmailAuthMessage] = useState<string | null>(null);
   const [emailAuthCanResend, setEmailAuthCanResend] = useState(false);
+  const [remindersEnabled, setRemindersEnabled] = useState(false);
+  const [reminderMinutes, setReminderMinutes] = useState<15 | 30 | 45>(30);
+  const reminderSettingsLoadedRef = useRef(false);
+  const reminderScheduleKeyRef = useRef<string | null>(null);
+  const reminderSchedulingRef = useRef(false);
   const ui = language === "ar" ? {
     greeting: "صباح الخير ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
@@ -180,9 +281,75 @@ export default function HomeScreen() {
   };
   const placesQuery = trpc.places.list.useQuery(serverPlaceFilters, { staleTime: 60_000, retry: 2 });
   const meQuery = trpc.auth.me.useQuery();
+  const logoutMutation = trpc.auth.logout.useMutation();
   const nearestPlaces = trpc.places.nearest.useMutation();
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
+
+  const updatePrayerReminders = async (enabled: boolean, minutes = reminderMinutes) => {
+    if (enabled) {
+      const ready = await configurePrayerNotifications();
+      if (!ready) {
+        Alert.alert(language === "ar" ? "التنبيهات غير مفعّلة" : "Notifications are disabled", language === "ar" ? "اسمح للتطبيق بالتنبيهات من إعدادات الهاتف." : "Allow notifications in your phone settings.");
+        return;
+      }
+    } else if (Platform.OS !== "web") {
+      await clearPrayerReminderSchedule();
+      reminderScheduleKeyRef.current = null;
+    }
+    setReminderMinutes(minutes as 15 | 30 | 45);
+    setRemindersEnabled(enabled);
+    await AsyncStorage.setItem(REMINDER_SETTINGS_KEY, JSON.stringify({ enabled, minutes }));
+  };
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    let responseSubscription: Notifications.EventSubscription | undefined;
+    void (async () => {
+      const stored = await AsyncStorage.getItem(REMINDER_SETTINGS_KEY);
+      const settings = stored ? JSON.parse(stored) as { enabled?: boolean; minutes?: 15 | 30 | 45 } : undefined;
+      const enabled = settings?.enabled === true;
+      const minutes = settings?.minutes === 15 || settings?.minutes === 45 ? settings.minutes : 30;
+      setRemindersEnabled(enabled);
+      setReminderMinutes(minutes);
+      reminderSettingsLoadedRef.current = true;
+    })();
+    responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const id = response.notification.request.identifier;
+      if (response.actionIdentifier === PRAYER_LATER_ACTION) {
+        void Notifications.scheduleNotificationAsync({
+          content: {
+            title: "تذكير من مصلاي",
+            body: "تذكيرك المؤجل للصلاة",
+            categoryIdentifier: PRAYER_REMINDER_CATEGORY,
+            data: { deferred: true },
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: new Date(Date.now() + 10 * 60 * 1000),
+            channelId: PRAYER_REMINDER_CHANNEL,
+          },
+        });
+      }
+      void Notifications.dismissNotificationAsync(id).catch(() => undefined);
+    });
+    return () => responseSubscription?.remove();
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === "web" || !reminderSettingsLoadedRef.current) return;
+    if (!remindersEnabled) return;
+    const scheduleKey = `${reminderMinutes}`;
+    if (reminderScheduleKeyRef.current === scheduleKey || reminderSchedulingRef.current) return;
+    reminderSchedulingRef.current = true;
+    void schedulePrayerReminders(reminderMinutes, userLocation)
+      .then(() => {
+        reminderScheduleKeyRef.current = scheduleKey;
+      })
+      .finally(() => {
+        reminderSchedulingRef.current = false;
+      });
+  }, [remindersEnabled, reminderMinutes, userLocation]);
 
   useEffect(() => {
     // Reset the cursor and accumulated server pages when the search/filter key changes.
@@ -214,7 +381,22 @@ export default function HomeScreen() {
       const known = new Set(current.map((place) => place.id));
       return [...current, ...placesQuery.data.filter((place) => !known.has(place.id))];
     });
+    void AsyncStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(placesQuery.data));
+    setUsingCachedPlaces(false);
   }, [activeFilter, placeOffset, placesQuery.data, userLocation]);
+
+  useEffect(() => {
+    void AsyncStorage.getItem(PLACES_CACHE_KEY).then((value) => {
+      if (!value || loadedApiPlaces.length > 0 || placesQuery.data) return;
+      try {
+        const cached = JSON.parse(value) as any[];
+        if (cached.length > 0) {
+          setLoadedApiPlaces(cached);
+          setUsingCachedPlaces(true);
+        }
+      } catch { /* ignore an invalid cache and continue with the network */ }
+    });
+  }, [loadedApiPlaces.length, placesQuery.data]);
 
   useEffect(() => {
     if (activeFilter !== "nearest" || !nearestPlaces.data) return;
@@ -278,24 +460,43 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
+    let magnetometerSubscription: { remove: () => void } | null = null;
+    const smoothHeading = (next: number) => {
+      const normalized = (next + 360) % 360;
+      setCompassHeading((previous) => {
+        const delta = ((normalized - previous + 540) % 360) - 180;
+        return (previous + delta * 0.28 + 360) % 360;
+      });
+      setHeadingReady(true);
+    };
     Location.watchHeadingAsync((heading) => {
       // trueHeading is corrected for magnetic declination when available.
       const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
       if (Number.isFinite(value)) {
-        setCompassHeading((value + 360) % 360);
-        setHeadingReady(true);
+        headingStreamRef.current = true;
+        smoothHeading(value);
       }
     }).then((next) => { subscription = next; }).catch(() => {
-      // Some devices do not expose a compass; the UI will keep showing the fixed true bearing.
+      // Magnetometer fallback below handles devices without Location heading support.
     });
-    return () => subscription?.remove();
+    Magnetometer.setUpdateInterval(120);
+    magnetometerSubscription = Magnetometer.addListener(({ x, y }) => {
+      if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
+      // Expo's native axes point east/north; convert them to a clockwise heading.
+      const heading = (Math.atan2(y, x) * 180) / Math.PI;
+      smoothHeading((360 - heading + 360) % 360);
+    });
+    return () => {
+      subscription?.remove();
+      magnetometerSubscription?.remove();
+    };
   }, []);
 
   const prayerState = useMemo(() => {
     const today = getPrayerSchedule(now, userLocation);
     let next = today.find(([, time]) => time.getTime() > now.getTime());
     if (!next) {
-      const tomorrow = new Date(now);
+      const tomorrow = getJordanCalendarDate(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
       next = getPrayerSchedule(tomorrow, userLocation)[0];
     }
@@ -446,16 +647,12 @@ export default function HomeScreen() {
 
   const signOut = async () => {
     try {
-      const token = await Auth.getSessionToken();
-      await fetch(`${getApiBaseUrl()}/api/auth/logout`, {
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        credentials: "include",
-      });
+      await logoutMutation.mutateAsync();
     } finally {
       await Auth.removeSessionToken();
       await Auth.clearUserInfo();
-      await meQuery.refetch();
+      await meQuery.refetch({ cancelRefetch: true });
+      setActiveTab("home");
     }
   };
 
@@ -572,13 +769,14 @@ export default function HomeScreen() {
           <Pressable style={styles.mapControl} onPress={requestLocation}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
         </View>
 
+        {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
         <View style={styles.listHeader}><Text style={styles.nearbyCount}>{filteredPlaces.length} {ui.nearbyCount}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
         {placeGroups.map(({ groupTitle, groupPlaces }) => groupPlaces.length > 0 && <View key={groupTitle}>
-          <Text style={styles.groupTitle}>{groupTitle}</Text>
+          <Text style={[styles.groupTitle, groupTitle === ui.mosques ? styles.mosqueTitle : styles.musallaTitle]}>{groupTitle}</Text>
           {groupPlaces.map((place) => (
           <View key={place.id} style={styles.placeCard}>
             <View style={styles.placeMain}>
-              <View style={styles.placeIcon}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={COLORS.navy} /></View>
+              <View style={[styles.placeIcon, place.type === "مسجد" ? styles.mosqueIcon : styles.musallaIcon]}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={place.type === "مسجد" ? COLORS.mosqueGreen : COLORS.musallaBlue} /></View>
               <View style={styles.placeInfo}>
                 <View style={styles.nameRow}><Text style={styles.placeName}>{place.name}</Text>{place.status === "pending" && <View style={styles.unverifiedPill}><Text style={styles.unverifiedText}>{ui.unverified}</Text></View>}<View style={[styles.openPill, place.open === false && styles.closedPill, place.open === null && styles.unknownPill]}><Text style={[styles.openText, place.open === false && styles.closedText, place.open === null && styles.unknownText]}>{place.open === true ? (language === "ar" ? "مفتوح" : "Open") : place.open === false ? (language === "ar" ? "مغلق" : "Closed") : ui.unknownHours}</Text></View></View>
                 <Text style={styles.placeMeta}>{language === "ar" ? place.type : (place.type === "مسجد" ? "Mosque" : "Musalla")} · {place.distance} · {place.drive}{language === "ar" ? " بالسيارة" : " by car"}</Text>
@@ -611,7 +809,7 @@ export default function HomeScreen() {
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
-              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "وجّه السهم الذهبي نحو الكعبة" : "Point the gold arrow toward the Kaaba"}</Text>
+              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "السهم الذهبي يشير تلقائيًا إلى الكعبة" : "The gold arrow points to the Kaaba automatically"}</Text>
               <View style={styles.qiblaCompass}>
                 <View style={styles.qiblaGlow} />
                 <View style={styles.qiblaRing}>
@@ -621,7 +819,7 @@ export default function HomeScreen() {
                 </View>
               </View>
               <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View></View>
-              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي بدقة" : "Calculated precisely from your current location") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
+              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي، ولا تحتاج إلى تحريك الهاتف للمعايرة" : "Calculated from your current location with no manual calibration") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
               <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? "البوصلة جاهزة" : "Compass ready") : (language === "ar" ? "بانتظار الموقع والبوصلة" : "Waiting for location and compass")}</Text></View>
               {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
@@ -632,7 +830,11 @@ export default function HomeScreen() {
                 <Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{ui.login}</Text></Pressable>
                 <Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("login")}><Text style={styles.secondaryModalText}>{ui.emailLogin}</Text></Pressable>
               </>}
-              {meQuery.data?.role === "admin" && <Pressable style={styles.adminLink} onPress={() => { setActiveTab("home"); router.push({ pathname: "/admin" } as never); }}><Text style={styles.adminLinkText}>{ui.admin}</Text></Pressable>}
+              <View style={styles.reminderBox}>
+                <View style={styles.reminderHeader}><View><Text style={styles.reminderTitle}>{language === "ar" ? "تذكير الصلاة" : "Prayer reminder"}</Text><Text style={styles.reminderHint}>{language === "ar" ? "تنبيه محلي قبل الصلاة، ويمكنك اختيار نعم أو تأجيله" : "A local reminder before prayer; choose done or snooze"}</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: remindersEnabled }} onPress={() => void updatePrayerReminders(!remindersEnabled)} style={[styles.reminderSwitch, remindersEnabled && styles.reminderSwitchOn]}><View style={[styles.reminderKnob, remindersEnabled && styles.reminderKnobOn]} /></Pressable></View>
+                {remindersEnabled && <View style={styles.reminderMinutes}><Text style={styles.reminderMinutesLabel}>{language === "ar" ? "التنبيه قبل الصلاة بـ" : "Remind me"}</Text>{([15, 30, 45] as const).map((minutes) => <Pressable key={minutes} onPress={() => { setReminderMinutes(minutes); void updatePrayerReminders(true, minutes); }} style={[styles.minuteChip, reminderMinutes === minutes && styles.minuteChipActive]}><Text style={[styles.minuteChipText, reminderMinutes === minutes && styles.minuteChipTextActive]}>{minutes} {language === "ar" ? "دقيقة" : "min"}</Text></Pressable>)}</View>}
+              </View>
+              <View style={styles.legalLinks}><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/privacy" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "سياسة الخصوصية" : "Privacy policy"}</Text></Pressable><Text style={styles.legalSeparator}>•</Text><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/terms" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "شروط الاستخدام" : "Terms of use"}</Text></Pressable></View>
               {meQuery.data && <Pressable style={styles.secondaryModalButton} onPress={signOut}><Text style={styles.secondaryModalText}>{ui.logout}</Text></Pressable>}
             </>}
           </View>
@@ -764,10 +966,15 @@ const styles = StyleSheet.create({
   listHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 9 },
   nearbyCount: { color: COLORS.ink, fontSize: 13, fontWeight: "800" },
   sortText: { color: COLORS.muted, fontSize: 11 },
+  offlineNotice: { color: COLORS.gold, backgroundColor: COLORS.goldSoft, borderRadius: 8, padding: 8, fontSize: 10, textAlign: "right", marginBottom: 8 },
   groupTitle: { color: COLORS.navy, fontSize: 16, fontWeight: "800", textAlign: "right", marginTop: 10, marginBottom: 8 },
+  mosqueTitle: { color: COLORS.mosqueGreen },
+  musallaTitle: { color: COLORS.musallaBlue },
   placeCard: { backgroundColor: COLORS.white, borderRadius: 16, padding: 13, marginBottom: 9, borderWidth: 1, borderColor: COLORS.line },
   placeMain: { flexDirection: "row-reverse", alignItems: "flex-start" },
-  placeIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: "#EEF5F8", alignItems: "center", justifyContent: "center", marginLeft: 10 },
+  placeIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", marginLeft: 10 },
+  mosqueIcon: { backgroundColor: "#E5F7F0" },
+  musallaIcon: { backgroundColor: COLORS.musallaSoft },
   placeInfo: { flex: 1 },
   nameRow: { flexDirection: "row-reverse", alignItems: "center", gap: 7, marginBottom: 5 },
   placeName: { color: COLORS.ink, fontSize: 14, fontWeight: "800", textAlign: "right" },
@@ -834,12 +1041,29 @@ const styles = StyleSheet.create({
   checkButtonActive: { backgroundColor: "#E5F7F0", borderColor: COLORS.green },
   adminLink: { alignItems: "center", paddingVertical: 14 },
   adminLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800" },
-  formInput: { height: 48, borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 12, color: COLORS.ink, marginBottom: 10, backgroundColor: COLORS.canvas },
+  formInput: { height: 48, borderWidth: 1, borderColor: "#C8D4DC", borderRadius: 12, paddingHorizontal: 12, color: COLORS.ink, marginBottom: 10, backgroundColor: COLORS.white, fontSize: 15 },
   commentInput: { height: 90, paddingTop: 12, textAlignVertical: "top" },
   formError: { color: COLORS.red, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
   formSuccess: { color: COLORS.green, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
   authLink: { alignItems: "center", paddingVertical: 12 },
   authLinkText: { color: COLORS.teal, fontSize: 12, fontWeight: "800" },
+  reminderBox: { backgroundColor: "#F3F8F8", borderRadius: 14, padding: 13, marginTop: 10, borderWidth: 1, borderColor: "#DCECEB" },
+  reminderHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 10 },
+  reminderTitle: { color: COLORS.navy, fontSize: 13, fontWeight: "900", textAlign: "right" },
+  reminderHint: { color: COLORS.muted, fontSize: 10, lineHeight: 16, textAlign: "right", marginTop: 3, maxWidth: 230 },
+  reminderSwitch: { width: 46, height: 27, borderRadius: 14, backgroundColor: "#C8D4DC", padding: 3, justifyContent: "center" },
+  reminderSwitchOn: { backgroundColor: COLORS.green },
+  reminderKnob: { width: 21, height: 21, borderRadius: 11, backgroundColor: COLORS.white },
+  reminderKnobOn: { alignSelf: "flex-end" },
+  reminderMinutes: { flexDirection: "row-reverse", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 11 },
+  reminderMinutesLabel: { color: COLORS.muted, fontSize: 10, fontWeight: "700" },
+  minuteChip: { borderRadius: 8, borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white, paddingHorizontal: 8, paddingVertical: 6 },
+  minuteChipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
+  minuteChipText: { color: COLORS.muted, fontSize: 10, fontWeight: "800" },
+  minuteChipTextActive: { color: COLORS.white },
+  legalLinks: { flexDirection: "row-reverse", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 12 },
+  legalLinkText: { color: COLORS.teal, fontSize: 10, fontWeight: "800" },
+  legalSeparator: { color: COLORS.muted, fontSize: 10 },
   ratingRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginVertical: 14 },
   typeRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 6 },
   typeButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },
