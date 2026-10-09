@@ -6,6 +6,8 @@ LOOPBACK_IPS.addSubnet("127.0.0.0", 8, "ipv4");
 LOOPBACK_IPS.addAddress("::1", "ipv6");
 LOOPBACK_IPS.addSubnet("::ffff:127.0.0.0", 104, "ipv6");
 
+const PUBLIC_PRODUCTION_ORIGINS = new Set(["https://wenausalli-budydcoo.manus.space"]);
+
 function configuredOrigin(name: "EXPO_PACKAGER_PROXY_URL" | "EXPO_WEB_PREVIEW_URL"): string | null {
   const value = process.env[name];
   if (!value) return null;
@@ -102,7 +104,7 @@ export function createCorsMiddleware(
     const allowedLocalOrigin =
       localApiRequest(req.hostname) && configuredLocalExpoWebOrigins().has(origin);
     const allowedConfiguredOrigin =
-      !loopbackOrigin && allowedOrigins.has(origin);
+      !loopbackOrigin && (allowedOrigins.has(origin) || PUBLIC_PRODUCTION_ORIGINS.has(origin));
     if (!sameOrigin && !allowedConfiguredOrigin && !allowedLocalOrigin) {
       res.status(403).json({ error: "origin_not_allowed" });
       return;
