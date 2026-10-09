@@ -251,6 +251,13 @@ export async function updatePlaceStatus(placeId: number, status: "approved" | "r
   await db.update(places).set({ status, reviewedBy, reviewedAt: new Date() }).where(eq(places.id, placeId));
 }
 
+export async function approveAllPendingPlaces(reviewedBy: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.update(places).set({ status: "approved", reviewedBy, reviewedAt: new Date() }).where(eq(places.status, "pending"));
+  return Number(result[0]?.affectedRows ?? 0);
+}
+
 export async function deletePlace(placeId: number, reviewedBy: number) {
   const db = await getDb();
   if (!db) throw new Error("Database is not available");

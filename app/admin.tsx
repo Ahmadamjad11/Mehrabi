@@ -21,11 +21,15 @@ function AdminContent() {
   const [loginError, setLoginError] = React.useState<string | null>(null);
   const me = trpc.auth.me.useQuery();
   const isAdmin = me.data?.role === "admin";
-  const places = trpc.admin.allPlaces.useQuery(undefined, { enabled: isAdmin, retry: 1 });
+  const pendingPlaces = trpc.admin.pendingPlaces.useQuery(undefined, { enabled: isAdmin && filter === "pending", retry: 1 });
+  const allPlaces = trpc.admin.allPlaces.useQuery(undefined, { enabled: isAdmin && filter !== "pending", retry: 1 });
   const reviews = trpc.admin.reviews.useQuery(undefined, { enabled: isAdmin, retry: 1 });
-  const setStatus = trpc.admin.setPlaceStatus.useMutation({ onSuccess: () => places.refetch() });
-  const deletePlace = trpc.admin.deletePlace.useMutation({ onSuccess: () => places.refetch() });
-  const restorePlace = trpc.admin.restorePlace.useMutation({ onSuccess: () => places.refetch() });
+  const refreshPlaces = () => { void pendingPlaces.refetch(); void allPlaces.refetch(); };
+  const places = filter === "pending" ? pendingPlaces : allPlaces;
+  const setStatus = trpc.admin.setPlaceStatus.useMutation({ onSuccess: refreshPlaces });
+  const deletePlace = trpc.admin.deletePlace.useMutation({ onSuccess: refreshPlaces });
+  const restorePlace = trpc.admin.restorePlace.useMutation({ onSuccess: refreshPlaces });
+  const approveAll = trpc.admin.approveAllPendingPlaces.useMutation({ onSuccess: refreshPlaces });
   const setReviewStatus = trpc.admin.setReviewStatus.useMutation({ onSuccess: () => reviews.refetch() });
 
   const login = async () => {
@@ -82,7 +86,7 @@ function AdminContent() {
         {isAdmin && <View style={styles.loggedInRow}><Text style={styles.loggedInText}>تم الدخول كمدير: {me.data?.email}</Text><Pressable style={styles.logoutButton} onPress={() => void logout()}><Text style={styles.logoutText}>تسجيل الخروج</Text></Pressable></View>}
         {!isAdmin ? null : <>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>{(["pending", "approved", "all", "deleted", "rejected"] as Filter[]).map((item) => <Pressable key={item} onPress={() => setFilter(item)} style={[styles.tab, filter === item && styles.tabActive]}><Text style={[styles.tabText, filter === item && styles.tabTextActive]}>{item === "all" ? "الكل" : statusLabel(item)}</Text></Pressable>)}</ScrollView>
-        <Text style={styles.sectionTitle}>الأماكن ({filteredPlaces.length})</Text>
+        <View style={{ flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between" }}><Text style={styles.sectionTitle}>الأماكن ({filteredPlaces.length})</Text>{filter === "pending" && filteredPlaces.length > 0 && <Pressable style={styles.logoutButton} disabled={approveAll.isPending} onPress={() => approveAll.mutate()}><Text style={styles.approveText}>{approveAll.isPending ? "جارٍ الاعتماد..." : "اعتماد الكل"}</Text></Pressable>}</View>
         {places.isLoading && <ActivityIndicator color={colors.navy} />}
         {places.isError && <View style={styles.accessBox}><Text style={styles.error}>انتهت جلسة الإدارة. سجّل الدخول مرة أخرى.</Text></View>}
         {!places.isLoading && !places.isError && filteredPlaces.length === 0 && <Text style={styles.empty}>لا توجد أماكن في هذه الحالة.</Text>}

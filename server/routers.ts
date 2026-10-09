@@ -5,6 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   addReview,
+  approveAllPendingPlaces,
   createPlace,
   deletePlace,
   getFavoritePlaceIds,
@@ -167,6 +168,7 @@ export const appRouter = router({
   admin: router({
     pendingPlaces: adminProcedure.query(() => listPlaces("pending")),
     allPlaces: adminProcedure.query(() => listAllPlaces()),
+    approveAllPendingPlaces: adminProcedure.mutation(({ ctx }) => approveAllPendingPlaces(ctx.user.id)),
     reviews: adminProcedure.query(() => listReviews()),
     setPlaceStatus: adminProcedure.input(z.object({ placeId: z.number().int().positive(), status: z.enum(["approved", "rejected"]) })).mutation(({ ctx, input }) =>
       updatePlaceStatus(input.placeId, input.status, ctx.user.id),
