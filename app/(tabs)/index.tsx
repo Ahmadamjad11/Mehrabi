@@ -125,18 +125,26 @@ const schedulePrayerReminders = async (minutesBefore: number, location: { lat: n
   await clearPrayerReminderSchedule();
   const now = new Date();
   const ids: string[] = [];
+  const scheduledKeys = new Set<string>();
+  const firstJordanDate = getJordanCalendarDate(now);
   for (let dayOffset = 0; dayOffset < 8; dayOffset += 1) {
-    const date = getJordanCalendarDate(new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000));
+    // Advance the Jordan calendar exactly once. The previous implementation
+    // converted an already-advanced date and then advanced it again, skipping
+    // every other day and leaving gaps in the reminder sequence.
+    const date = new Date(firstJordanDate.getTime());
     date.setDate(date.getDate() + dayOffset);
     for (const [name, prayerTime] of getPrayerSchedule(date, location)) {
       const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
       if (triggerDate <= now) continue;
+      const reminderKey = `${name}:${triggerDate.getTime()}`;
+      if (scheduledKeys.has(reminderKey)) continue;
+      scheduledKeys.add(reminderKey);
       const id = await Notifications.scheduleNotificationAsync({
         content: {
           title: "تذكير من مصلاي",
           body: `باقي ${minutesBefore} دقيقة على صلاة ${name}. هل صليت الصلاة السابقة؟`,
           categoryIdentifier: PRAYER_REMINDER_CATEGORY,
-          data: { prayerName: name },
+          data: { prayerName: name, reminderKey },
         },
         trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
       });
@@ -352,7 +360,9 @@ export default function HomeScreen() {
   useEffect(() => {
     if (Platform.OS === "web" || !reminderSettingsLoadedRef.current) return;
     if (!remindersEnabled) return;
-    const scheduleKey = `${reminderMinutes}`;
+    const jordanToday = getJordanCalendarDate(now);
+    const locationKey = userLocation ? `${userLocation.lat.toFixed(3)},${userLocation.lng.toFixed(3)}` : "default";
+    const scheduleKey = `${jordanToday.getFullYear()}-${jordanToday.getMonth()}-${jordanToday.getDate()}-${reminderMinutes}-${locationKey}`;
     if (reminderScheduleKeyRef.current === scheduleKey || reminderSchedulingRef.current) return;
     reminderSchedulingRef.current = true;
     void schedulePrayerReminders(reminderMinutes, userLocation)
@@ -362,7 +372,7 @@ export default function HomeScreen() {
       .finally(() => {
         reminderSchedulingRef.current = false;
       });
-  }, [remindersEnabled, reminderMinutes, userLocation]);
+  }, [now, remindersEnabled, reminderMinutes, userLocation]);
 
   useEffect(() => {
     // Reset the cursor and accumulated server pages when the search/filter key changes.
@@ -878,9 +888,9 @@ export default function HomeScreen() {
         <View style={styles.modalBackdrop}><View style={styles.modalCard}>
           <Pressable style={styles.modalClose} onPress={() => setEmailAuthVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
           <Text style={styles.modalTitle}>{emailAuthMode === "register" ? ui.emailRegister : emailAuthMode === "forgot" ? ui.forgotPassword : ui.emailLogin}</Text>
-          {emailAuthMode === "register" && <TextInput value={emailAuthName} onChangeText={setEmailAuthName} placeholder={ui.name} style={styles.formInput} textAlign="right" autoCapitalize="words" />}
-          <TextInput value={emailAuthEmail} onChangeText={setEmailAuthEmail} placeholder={ui.email} style={styles.formInput} textAlign="right" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
-          {emailAuthMode !== "forgot" && <TextInput value={emailAuthPassword} onChangeText={setEmailAuthPassword} placeholder={ui.password} style={styles.formInput} textAlign="right" secureTextEntry autoCapitalize="none" />}
+          {emailAuthMode === "register" && <TextInput value={emailAuthName} onChangeText={setEmailAuthName} placeholder={ui.name} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" autoCapitalize="words" />}
+          <TextInput value={emailAuthEmail} onChangeText={setEmailAuthEmail} placeholder={ui.email} placeholderTextColor="#8A98A5" style={[styles.formInput, styles.emailInput]} textAlign="left" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+          {emailAuthMode !== "forgot" && <TextInput value={emailAuthPassword} onChangeText={setEmailAuthPassword} placeholder={ui.password} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" secureTextEntry autoCapitalize="none" />}
           {emailAuthMessage && <Text style={styles.formSuccess}>{emailAuthMessage}</Text>}
           {emailAuthError && <Text style={styles.formError}>{emailAuthError}</Text>}
           <Pressable style={styles.primaryModalButton} disabled={emailAuthBusy} onPress={submitEmailAuth}><Text style={styles.primaryModalText}>{emailAuthBusy ? (language === "ar" ? "جاري المعالجة..." : "Working...") : emailAuthMode === "register" ? ui.createAccount : emailAuthMode === "forgot" ? ui.sendReset : ui.login}</Text></Pressable>
@@ -903,11 +913,11 @@ export default function HomeScreen() {
             <Pressable style={styles.secondaryModalButton} onPress={requestLocation}><Text style={styles.secondaryModalText}>{ui.useCurrentLocation}</Text></Pressable>
             <Pressable style={styles.primaryModalButton} disabled={!userLocation} onPress={() => setAddStep(2)}><Text style={styles.primaryModalText}>{ui.locationCorrect}</Text></Pressable>
           </> : <>
-            <TextInput value={placeName} onChangeText={setPlaceName} placeholder={ui.namePlaceholder} style={styles.formInput} textAlign="right" />
-            <TextInput value={placeAddress} onChangeText={setPlaceAddress} placeholder={ui.addressPlaceholder} style={styles.formInput} textAlign="right" />
+            <TextInput value={placeName} onChangeText={setPlaceName} placeholder={ui.namePlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />
+            <TextInput value={placeAddress} onChangeText={setPlaceAddress} placeholder={ui.addressPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />
             <View style={styles.typeRow}><Pressable style={[styles.typeButton, placeType === "mosque" && styles.typeButtonActive]} onPress={() => setPlaceType("mosque")}><Text style={styles.typeText}>{ui.mosques}</Text></Pressable><Pressable style={[styles.typeButton, placeType === "musalla" && styles.typeButtonActive]} onPress={() => setPlaceType("musalla")}><Text style={styles.typeText}>{ui.musallas}</Text></Pressable></View>
-            <TextInput value={placeHours} onChangeText={setPlaceHours} placeholder={ui.hoursPlaceholder} style={styles.formInput} textAlign="right" />
-            {placeType === "musalla" && <><TextInput value={buildingName} onChangeText={setBuildingName} placeholder={ui.buildingPlaceholder} style={styles.formInput} textAlign="right" /><TextInput value={buildingFloor} onChangeText={setBuildingFloor} placeholder={ui.floorPlaceholder} style={styles.formInput} textAlign="right" /></>}
+            <TextInput value={placeHours} onChangeText={setPlaceHours} placeholder={ui.hoursPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />
+            {placeType === "musalla" && <><TextInput value={buildingName} onChangeText={setBuildingName} placeholder={ui.buildingPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" /><TextInput value={buildingFloor} onChangeText={setBuildingFloor} placeholder={ui.floorPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" /></>}
             <View style={styles.checkRow}><Pressable onPress={() => setHasAblution(!hasAblution)} style={[styles.checkButton, hasAblution && styles.checkButtonActive]}><Text style={styles.typeText}>{hasAblution ? "✓ " : ""}{ui.ablution}</Text></Pressable><Pressable onPress={() => setHasWomenPrayer(!hasWomenPrayer)} style={[styles.checkButton, hasWomenPrayer && styles.checkButtonActive]}><Text style={styles.typeText}>{hasWomenPrayer ? "✓ " : ""}{ui.women}</Text></Pressable><Pressable onPress={() => setHasParking(!hasParking)} style={[styles.checkButton, hasParking && styles.checkButtonActive]}><Text style={styles.typeText}>{hasParking ? "✓ " : ""}{ui.parking}</Text></Pressable></View>
             <Pressable style={styles.secondaryModalButton} onPress={() => setAddStep(1)}><Text style={styles.secondaryModalText}>{ui.editLocation}</Text></Pressable>
             <Pressable style={styles.primaryModalButton} disabled={submitPlace.isPending || !placeName.trim()} onPress={() => submitPlace.mutate({ name: placeName, type: placeType, address: placeAddress, hours: placeHours || "غير معروفة", description: buildingName ? `المبنى: ${buildingName}، الطابق: ${buildingFloor || "غير محدد"}` : undefined, latitude: userLocation?.lat ?? 31.9539, longitude: userLocation?.lng ?? 35.9106, hasAblution, hasWomenPrayer, hasParking })}><Text style={styles.primaryModalText}>{submitPlace.isPending ? ui.submitting : ui.submit}</Text></Pressable>
@@ -920,7 +930,7 @@ export default function HomeScreen() {
           <Pressable style={styles.modalClose} onPress={() => setReviewVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
           <Text style={styles.modalTitle}>{ui.reviewTitle}</Text>
           <View style={styles.ratingRow}>{[1, 2, 3, 4, 5].map((rating) => <Pressable key={rating} onPress={() => setReviewRating(rating)}><Ionicons name={rating <= reviewRating ? "star" : "star-outline"} size={30} color={COLORS.gold} /></Pressable>)}</View>
-          <TextInput value={reviewComment} onChangeText={setReviewComment} placeholder={ui.reviewPlaceholder} style={[styles.formInput, styles.commentInput]} multiline textAlign="right" />
+          <TextInput value={reviewComment} onChangeText={setReviewComment} placeholder={ui.reviewPlaceholder} placeholderTextColor="#8A98A5" style={[styles.formInput, styles.commentInput]} multiline textAlign="right" />
           <Pressable style={styles.primaryModalButton} disabled={submitReview.isPending} onPress={() => reviewPlaceId && submitReview.mutate({ placeId: reviewPlaceId, rating: reviewRating, comment: reviewComment })}><Text style={styles.primaryModalText}>{ui.publishReview}</Text></Pressable>
         </View></View>
       </Modal>
@@ -1040,8 +1050,8 @@ const styles = StyleSheet.create({
   modalBackdrop: { flex: 1, backgroundColor: "rgba(16,45,74,0.35)", justifyContent: "flex-end" },
   modalCard: { backgroundColor: COLORS.white, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 22, minHeight: 300, paddingBottom: 38 },
   modalClose: { alignSelf: "flex-start", width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.canvas, alignItems: "center", justifyContent: "center" },
-  modalTitle: { color: COLORS.navy, fontSize: 22, fontWeight: "800", textAlign: "right", marginTop: 14, marginBottom: 8 },
-  modalHint: { color: COLORS.muted, fontSize: 12, lineHeight: 20, textAlign: "right", marginBottom: 16 },
+  modalTitle: { color: COLORS.navy, fontSize: 25, fontWeight: "900", textAlign: "right", writingDirection: "rtl", marginTop: 14, marginBottom: 10 },
+  modalHint: { color: COLORS.muted, fontSize: 13, lineHeight: 21, fontWeight: "500", textAlign: "right", writingDirection: "rtl", marginBottom: 16 },
   exploreRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   exploreRowText: { color: COLORS.ink, fontSize: 14, fontWeight: "700" },
   qiblaHeroHint: { color: COLORS.teal, fontSize: 13, fontWeight: "800", textAlign: "center", marginBottom: 3 },
@@ -1066,23 +1076,24 @@ const styles = StyleSheet.create({
   compassStatusReady: { backgroundColor: COLORS.green },
   compassStatusWaiting: { backgroundColor: COLORS.gold },
   compassStatusText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
-  primaryModalButton: { height: 46, borderRadius: 13, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
-  primaryModalText: { color: COLORS.white, fontSize: 13, fontWeight: "800" },
+  primaryModalButton: { height: 50, borderRadius: 14, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
+  primaryModalText: { color: COLORS.white, fontSize: 15, fontWeight: "800", writingDirection: "rtl" },
   calibrationHint: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "center", marginBottom: 3 },
   secondaryModalButton: { height: 44, borderRadius: 13, backgroundColor: COLORS.canvas, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center", marginTop: 10 },
-  secondaryModalText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
+  secondaryModalText: { color: COLORS.navy, fontSize: 14, fontWeight: "800", writingDirection: "rtl" },
   pickerMap: { height: 220, overflow: "hidden", borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 4 },
   checkRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 4 },
   checkButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },
   checkButtonActive: { backgroundColor: "#E5F7F0", borderColor: COLORS.green },
   adminLink: { alignItems: "center", paddingVertical: 14 },
   adminLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800" },
-  formInput: { height: 48, borderWidth: 1, borderColor: "#C8D4DC", borderRadius: 12, paddingHorizontal: 12, color: COLORS.ink, marginBottom: 10, backgroundColor: COLORS.white, fontSize: 15 },
-  commentInput: { height: 90, paddingTop: 12, textAlignVertical: "top" },
+  formInput: { height: 52, borderWidth: 1.5, borderColor: "#C8D4DC", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 0, color: COLORS.ink, marginBottom: 11, backgroundColor: COLORS.white, fontSize: 16, fontWeight: "500", writingDirection: "rtl", textAlignVertical: "center" },
+  emailInput: { writingDirection: "ltr", fontWeight: "500" },
+  commentInput: { height: 96, paddingTop: 14, textAlignVertical: "top" },
   formError: { color: COLORS.red, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
   formSuccess: { color: COLORS.green, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
   authLink: { alignItems: "center", paddingVertical: 12 },
-  authLinkText: { color: COLORS.teal, fontSize: 12, fontWeight: "800" },
+  authLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800", writingDirection: "rtl" },
   reminderBox: { backgroundColor: "#F3F8F8", borderRadius: 14, padding: 13, marginTop: 10, borderWidth: 1, borderColor: "#DCECEB" },
   reminderHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 10 },
   reminderTitle: { color: COLORS.navy, fontSize: 13, fontWeight: "900", textAlign: "right" },
