@@ -197,6 +197,16 @@ const bearingToKaaba = (latitude: number, longitude: number) => {
   return (bearing + 360) % 360;
 };
 
+const distanceToKaabaKm = (latitude: number, longitude: number) => {
+  const earthRadiusKm = 6371;
+  const lat1 = (latitude * Math.PI) / 180;
+  const lat2 = (21.4225 * Math.PI) / 180;
+  const dLat = lat2 - lat1;
+  const dLng = ((39.8262 - longitude) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
 const createOsmHtml = (places: Place[], userLocation: { lat: number; lng: number } | null) => {
   const points = JSON.stringify(places.map((place) => [place.lat, place.lng, place.name]));
   const center = userLocation ? `[${userLocation.lat},${userLocation.lng}]` : "[31.9539,35.9106]";
@@ -220,6 +230,8 @@ export default function HomeScreen() {
   const [now, setNow] = useState(() => new Date());
   const [compassHeading, setCompassHeading] = useState(0);
   const [headingReady, setHeadingReady] = useState(false);
+  const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
+  const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
   const headingStreamRef = useRef(false);
   const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
@@ -256,6 +268,7 @@ export default function HomeScreen() {
   const ui = language === "ar" ? {
     greeting: "صباح الخير ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
+    nearby: "أماكن الصلاة القريبة منك", search: "ابحث عن مسجد أو مصلى أو منطقة...", mapLocation: "موقعك", all: "عرض القائمة", mosques: "المساجد", musallas: "المصليات", open: "مفتوح الآن", ablution: "وضوء", women: "مصلى النساء", nearest: "الأقرب أولًا", verified: "متحقق", unverified: "قيد المراجعة", unknownHours: "الأوقات غير معروفة",
     go: "اذهب", add: "أضف مكانًا تعرفه", home: "الرئيسية", explore: "استكشف", qibla: "القبلة", account: "حسابي", prayerPrefix: "صلاة", prayerHint: "لا تفوّت الصلاة أينما كنت", listTitle: "القائمة", listHint: "أنت تشاهد جميع الأماكن القريبة.", exploreTitle: "استكشف أماكن الصلاة", exploreHint: "ابحث وفلتر الأماكن حسب النوع والخدمات، والنتائج مرتبة من الأقرب.", accountTitle: "حسابي", accountHint: "سجّل الدخول لإضافة مكان وكتابة التقييمات.", login: "تسجيل الدخول", logout: "تسجيل الخروج", emailLogin: "الدخول بالبريد الإلكتروني", emailRegister: "إنشاء حساب بالبريد", email: "البريد الإلكتروني", password: "كلمة المرور", name: "الاسم", forgotPassword: "نسيت كلمة المرور؟", sendReset: "إرسال رابط الاستعادة", resendVerification: "إعادة إرسال رسالة التأكيد", createAccount: "إنشاء الحساب", haveAccount: "لديك حساب؟ تسجيل الدخول", backToLogin: "العودة لتسجيل الدخول", verifyHint: "افحص بريدك واضغط رابط التأكيد قبل تسجيل الدخول.", resetSent: "إذا كان البريد مسجلًا فستصلك رسالة الاستعادة قريبًا.", verifySent: "تم إنشاء الحساب. افحص بريدك لتأكيد الحساب.", admin: "فتح لوحة الإدارة", addTitle: "إضافة مكان جديد", selectLocation: "حدد موقع المكان", placeData: "بيانات المكان", pickerHint: "اضغط على الخريطة لوضع الدبوس بدقة، أو استخدم موقعك الحالي.", useCurrentLocation: "استخدم موقعي الحالي", locationCorrect: "الموقع صحيح، متابعة", editLocation: "تعديل الموقع", namePlaceholder: "اسم المسجد أو المصلى", addressPlaceholder: "العنوان أو المنطقة", hoursPlaceholder: "ساعات العمل أو غير معروفة", buildingPlaceholder: "اسم المبنى (اختياري)", floorPlaceholder: "الطابق (اختياري)", submit: "إرسال للمراجعة", submitting: "جاري الإرسال...", editPlace: "المكان", parking: "مواقف", reviewTitle: "أضف تقييمك", reviewPlaceholder: "اكتب تعليقًا (اختياري)", publishReview: "نشر التقييم", loadMore: "تحميل 20 مكانًا إضافيًا", nearbyCount: "أماكن قريبة",
   } : {
     greeting: "Good morning ✦", title: "Where will you pray today?", useLocation: "Use my location", located: "Location detected",
@@ -461,6 +474,11 @@ export default function HomeScreen() {
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
     let magnetometerSubscription: { remove: () => void } | null = null;
+    if (activeTab !== "qibla") {
+      headingStreamRef.current = false;
+      return () => undefined;
+    }
+    headingStreamRef.current = false;
     const smoothHeading = (next: number) => {
       const normalized = (next + 360) % 360;
       setCompassHeading((previous) => {
@@ -469,11 +487,14 @@ export default function HomeScreen() {
       });
       setHeadingReady(true);
     };
+    void Magnetometer.requestPermissionsAsync().catch(() => undefined);
     Location.watchHeadingAsync((heading) => {
       // trueHeading is corrected for magnetic declination when available.
       const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
       if (Number.isFinite(value)) {
         headingStreamRef.current = true;
+        setHeadingSource("gps");
+        setHeadingAccuracy(Number.isFinite(heading.accuracy) ? heading.accuracy : null);
         smoothHeading(value);
       }
     }).then((next) => { subscription = next; }).catch(() => {
@@ -484,13 +505,16 @@ export default function HomeScreen() {
       if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
       // Expo's native axes point east/north; convert them to a clockwise heading.
       const heading = (Math.atan2(y, x) * 180) / Math.PI;
+      setHeadingSource("sensor");
+      setHeadingAccuracy(null);
       smoothHeading((360 - heading + 360) % 360);
     });
     return () => {
       subscription?.remove();
       magnetometerSubscription?.remove();
+      headingStreamRef.current = false;
     };
-  }, []);
+  }, [activeTab, locationEnabled]);
 
   const prayerState = useMemo(() => {
     const today = getPrayerSchedule(now, userLocation);
@@ -505,6 +529,7 @@ export default function HomeScreen() {
 
   const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
   const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
+  const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
 
   const apiPlaces: Place[] = loadedApiPlaces.map((place) => ({
     id: String(place.id),
@@ -564,6 +589,14 @@ export default function HomeScreen() {
     } catch {
       setLocationError(language === "ar" ? "تعذر تحديد الموقع" : "Unable to determine location");
     }
+  };
+
+  const openQibla = async () => {
+    setHeadingReady(false);
+    setHeadingSource(null);
+    setHeadingAccuracy(null);
+    setActiveTab("qibla");
+    if (!locationEnabled) await requestLocation();
   };
 
   const beginLogin = async () => {
@@ -809,7 +842,8 @@ export default function HomeScreen() {
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
-              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "السهم الذهبي يشير تلقائيًا إلى الكعبة" : "The gold arrow points to the Kaaba automatically"}</Text>
+              <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{language === "ar" ? "قبلة ذكية — تتحدث تلقائيًا" : "Smart Qibla — updates automatically"}</Text></View>
+              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "السهم الذهبي يشير إلى الكعبة حسب اتجاه هاتفك" : "The gold arrow points to the Kaaba using your phone heading"}</Text>
               <View style={styles.qiblaCompass}>
                 <View style={styles.qiblaGlow} />
                 <View style={styles.qiblaRing}>
@@ -818,9 +852,9 @@ export default function HomeScreen() {
                   <View style={styles.qiblaCenter} />
                 </View>
               </View>
-              <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View></View>
-              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "محسوبة من موقعك الحالي، ولا تحتاج إلى تحريك الهاتف للمعايرة" : "Calculated from your current location with no manual calibration") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
-              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? "البوصلة جاهزة" : "Compass ready") : (language === "ar" ? "بانتظار الموقع والبوصلة" : "Waiting for location and compass")}</Text></View>
+              <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(kaabaDistance).toLocaleString(language === "ar" ? "ar-JO" : "en-US")}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "كم إلى الكعبة" : "km to Kaaba"}</Text></View></View>
+              <Text style={styles.modalHint}>{userLocation ? (language === "ar" ? "تحسب الاتجاه الجغرافي تلقائيًا من موقعك وتحدّث السهم مع اتجاه الهاتف، دون معايرة يدوية." : "The bearing is calculated from your location and the arrow updates with your phone, without manual calibration.") : (language === "ar" ? "فعّل الموقع للحصول على أدق اتجاه" : "Enable location for the most accurate direction")}</Text>
+              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? `البوصلة جاهزة · ${headingSource === "gps" ? "اتجاه حقيقي" : "حساس الهاتف"}${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · ${headingSource === "gps" ? "true heading" : "phone sensor"}`) : (language === "ar" ? "جارٍ تشغيل الموقع والحساس تلقائيًا" : "Starting location and sensors automatically")}</Text></View>
               {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
@@ -893,7 +927,7 @@ export default function HomeScreen() {
       <View style={styles.tabBar}>
         <Pressable style={styles.tabItem}><Ionicons name="home" size={22} color={COLORS.navy} /><Text style={[styles.tabText, styles.tabActive]}>{ui.home}</Text></Pressable>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab("explore")}><Ionicons name="compass-outline" size={22} color={COLORS.muted} /><Text style={styles.tabText}>{ui.explore}</Text></Pressable>
-        <Pressable style={styles.tabItem} onPress={() => setActiveTab("qibla")}><MaterialCommunityIcons name="compass-rose" size={22} color={COLORS.muted} /><Text style={styles.tabText}>{ui.qibla}</Text></Pressable>
+        <Pressable style={styles.tabItem} onPress={() => void openQibla()}><MaterialCommunityIcons name="compass-rose" size={22} color={COLORS.muted} /><Text style={styles.tabText}>{ui.qibla}</Text></Pressable>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab("account")}><Ionicons name="person-outline" size={22} color={COLORS.muted} /><Text style={styles.tabText}>{ui.account}</Text></Pressable>
       </View>
     </SafeAreaView>
@@ -1011,6 +1045,8 @@ const styles = StyleSheet.create({
   exploreRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   exploreRowText: { color: COLORS.ink, fontSize: 14, fontWeight: "700" },
   qiblaHeroHint: { color: COLORS.teal, fontSize: 13, fontWeight: "800", textAlign: "center", marginBottom: 3 },
+  qiblaSmartBadge: { alignSelf: "center", flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: "#E5F7F0", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 7 },
+  qiblaSmartText: { color: COLORS.green, fontSize: 11, fontWeight: "900" },
   qiblaCompass: { alignItems: "center", justifyContent: "center", height: 220, marginVertical: 2, position: "relative" },
   qiblaGlow: { position: "absolute", width: 205, height: 205, borderRadius: 103, backgroundColor: "#EAF7F5" },
   qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
