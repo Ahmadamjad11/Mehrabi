@@ -497,7 +497,7 @@ export default function HomeScreen() {
       });
       setHeadingReady(true);
     };
-    void Magnetometer.requestPermissionsAsync().catch(() => undefined);
+    if (Platform.OS !== "web") void Magnetometer.requestPermissionsAsync().catch(() => undefined);
     Location.watchHeadingAsync((heading) => {
       // trueHeading is corrected for magnetic declination when available.
       const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
@@ -510,15 +510,17 @@ export default function HomeScreen() {
     }).then((next) => { subscription = next; }).catch(() => {
       // Magnetometer fallback below handles devices without Location heading support.
     });
-    Magnetometer.setUpdateInterval(120);
-    magnetometerSubscription = Magnetometer.addListener(({ x, y }) => {
-      if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
-      // Expo's native axes point east/north; convert them to a clockwise heading.
-      const heading = (Math.atan2(y, x) * 180) / Math.PI;
-      setHeadingSource("sensor");
-      setHeadingAccuracy(null);
-      smoothHeading((360 - heading + 360) % 360);
-    });
+    if (Platform.OS !== "web" && typeof Magnetometer.addListener === "function") {
+      Magnetometer.setUpdateInterval(120);
+      magnetometerSubscription = Magnetometer.addListener(({ x, y }) => {
+        if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        // Expo's native axes point east/north; convert them to a clockwise heading.
+        const heading = (Math.atan2(y, x) * 180) / Math.PI;
+        setHeadingSource("sensor");
+        setHeadingAccuracy(null);
+        smoothHeading((360 - heading + 360) % 360);
+      });
+    }
     return () => {
       subscription?.remove();
       magnetometerSubscription?.remove();
