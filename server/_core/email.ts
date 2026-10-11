@@ -37,6 +37,9 @@ function getTransporter() {
     port,
     secure: port === 465,
     auth: { user, pass: password },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 15000,
   });
 }
 
@@ -44,13 +47,15 @@ async function sendSystemEmail(input: { to: string; subject: string; text: strin
   const user = process.env.SMTP_USER;
   const from = process.env.SMTP_FROM?.trim();
   if (!user || !from || !from.includes("@")) throw new Error("SMTP production sender is not configured");
-  await getTransporter().sendMail({
+  console.log(`[Email] Sending message through SMTP on port ${Number(process.env.SMTP_PORT || "587")}`);
+  const result = await getTransporter().sendMail({
     from: `مِحرابي <${from}>`,
     to: input.to,
     subject: input.subject,
     text: input.text,
     html: input.html,
   });
+  console.log(`[Email] SMTP accepted=${result.accepted.length} rejected=${result.rejected.length}`);
 }
 
 export async function sendVerificationEmail(input: { to: string; name: string; token: string }) {
