@@ -43,6 +43,13 @@
       "when": 1790895045416,
       "tag": "0005_silly_the_anarchist",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1791713711510,
+      "tag": "0006_natural_reavers",
+      "breakpoints": true
     }
   ]
 }

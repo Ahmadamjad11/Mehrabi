@@ -107,6 +107,13 @@ export async function getUserByEmail(email: string) {
   return result[0];
 }
 
+export async function getUserByPhone(phone: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.phone, phone)).limit(1);
+  return result[0];
+}
+
 export async function getUserById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -117,6 +124,7 @@ export async function getUserById(id: number) {
 export async function createEmailUser(input: {
   openId: string;
   name: string;
+  phone: string;
   email: string;
   passwordHash: string;
 }) {
@@ -125,6 +133,7 @@ export async function createEmailUser(input: {
   const result = await db.insert(users).values({
     openId: input.openId,
     name: input.name,
+    phone: input.phone,
     email: input.email,
     loginMethod: "email",
     passwordHash: input.passwordHash,

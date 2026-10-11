@@ -73,3 +73,13 @@ export async function sendPasswordResetEmail(input: { to: string; name: string; 
     html: `<!doctype html><html lang="ar" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f7f9fa;padding:32px;color:#122033"><div style="max-width:560px;margin:auto;background:#fff;border-radius:18px;padding:32px"><h1 style="color:#102d4a">مصلاي</h1><p>مرحبًا ${name}،</p><p>يمكنك تعيين كلمة مرور جديدة من خلال الزر التالي:</p><p><a href="${url}" style="display:inline-block;background:#102d4a;color:#fff;padding:13px 22px;border-radius:9px;text-decoration:none">تعيين كلمة مرور جديدة</a></p><p style="color:#788595;font-size:13px">ينتهي هذا الرابط خلال ساعة واحدة. إذا لم تطلب الاستعادة فتجاهل هذه الرسالة.</p></div></body></html>`,
   });
 }
+
+export async function sendVerificationOtpEmail(input: { to: string; name: string; code: string }) {
+  const name = escapeHtml(input.name || "مستخدم محرابي");
+  await sendSystemEmail({
+    to: input.to,
+    subject: "رمز تأكيد بريدك في مِحرابي",
+    text: `مرحبًا ${input.name || "بك"}، رمز تأكيد بريدك في مِحرابي هو: ${input.code}. ينتهي خلال 10 دقائق.`,
+    html: `<!doctype html><html lang="ar" dir="rtl"><body style="font-family:Arial,sans-serif;background:#f7f9fa;padding:32px;color:#122033"><div style="max-width:560px;margin:auto;background:#fff;border-radius:18px;padding:32px;text-align:center"><h1 style="color:#102d4a">مِحرابي</h1><p>مرحبًا ${name}،</p><p>استخدم رمز التحقق التالي داخل التطبيق:</p><div style="font-size:32px;letter-spacing:8px;font-weight:800;color:#102d4a;background:#f0f7f7;padding:18px;border-radius:12px">${input.code}</div><p style="color:#788595;font-size:13px">ينتهي الرمز خلال 10 دقائق.</p></div></body></html>`,
+  });
+}

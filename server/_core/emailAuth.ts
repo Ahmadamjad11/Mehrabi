@@ -7,6 +7,7 @@ import {
   createEmailUser,
   getActiveAuthToken,
   getUserByEmail,
+  getUserByPhone,
   getUserById,
   markAuthTokenUsed,
   markUserEmailVerified,
@@ -16,24 +17,30 @@ import {
 import { ONE_YEAR_MS } from "../../shared/const.js";
 import { getSessionCookieName, getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
-import { sendPasswordResetEmail, sendVerificationEmail } from "./email";
+import { sendPasswordResetEmail, sendVerificationOtpEmail } from "./email";
 
 const scryptAsync = promisify(scrypt);
 const PASSWORD_MIN_LENGTH = 8;
-const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const VERIFICATION_TOKEN_TTL_MS = 10 * 60 * 1000;
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(80),
+  phone: z.string().trim().min(7).max(32),
   email: z.string().trim().email().max(320),
   password: z.string().min(PASSWORD_MIN_LENGTH).max(128),
 });
-const loginSchema = z.object({ email: z.string().trim().email().max(320), password: z.string().min(1).max(128) });
+const loginSchema = z.object({ identifier: z.string().trim().min(3).max(320), password: z.string().min(1).max(128) });
 const forgotSchema = z.object({ email: z.string().trim().email().max(320) });
+const verifyOtpSchema = z.object({ email: z.string().trim().email().max(320), code: z.string().regex(/^\d{6}$/) });
 const resetSchema = z.object({ token: z.string().min(32).max(256), password: z.string().min(PASSWORD_MIN_LENGTH).max(128) });
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function normalizePhone(phone: string) {
+  return phone.trim().replace(/[\s()-]/g, "");
 }
 
 async function hashPassword(password: string) {
@@ -56,6 +63,10 @@ async function verifyPassword(password: string, storedHash: string) {
 
 function createRawToken() {
   return randomBytes(32).toString("hex");
+}
+
+function createOtpCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 function hashToken(token: string) {
@@ -102,14 +113,14 @@ function htmlPage(title: string, message: string, status = 200, form?: string) {
 
 async function issueVerificationEmail(user: NonNullable<Awaited<ReturnType<typeof getUserById>>>) {
   if (!user.email) throw new Error("Email is required");
-  const rawToken = createRawToken();
+  const rawToken = createOtpCode();
   await createAuthToken({
     userId: user.id,
     tokenHash: hashToken(rawToken),
     type: "email_verification",
     expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS),
   });
-  await sendVerificationEmail({ to: user.email, name: user.name || "مستخدم مصلاي", token: rawToken });
+  await sendVerificationOtpEmail({ to: user.email, name: user.name || "مستخدم مِحرابي", code: rawToken });
 }
 
 async function issueResetEmail(user: NonNullable<Awaited<ReturnType<typeof getUserById>>>) {
@@ -142,24 +153,27 @@ export function registerEmailAuthRoutes(app: Express) {
   app.post("/api/auth/email/register", async (req, res) => {
     const parsed = registerSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "الاسم والبريد وكلمة المرور غير صالحة" });
+      res.status(400).json({ error: "الاسم ورقم الهاتف والبريد وكلمة المرور غير صالحة" });
       return;
     }
     const email = normalizeEmail(parsed.data.email);
+    const phone = normalizePhone(parsed.data.phone);
     try {
       const existing = await getUserByEmail(email);
+      const existingPhone = await getUserByPhone(phone);
       if (existing?.passwordHash && !existing.emailVerifiedAt) {
         await issueVerificationEmail(existing);
         res.status(200).json({ success: true, requiresEmailVerification: true, message: "تم إرسال رسالة تأكيد جديدة إلى بريدك." });
         return;
       }
-      if (existing) {
+      if (existing || existingPhone) {
         res.status(409).json({ error: "يوجد حساب بهذا البريد الإلكتروني" });
         return;
       }
       const userId = await createEmailUser({
         openId: emailOpenId(email),
         name: parsed.data.name,
+        phone,
         email,
         passwordHash: await hashPassword(parsed.data.password),
       });
@@ -176,10 +190,13 @@ export function registerEmailAuthRoutes(app: Express) {
   app.post("/api/auth/email/login", async (req, res) => {
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "البريد أو كلمة المرور غير صالحة" });
+      res.status(400).json({ error: "البريد/الهاتف أو كلمة المرور غير صالحة" });
       return;
     }
-    const user = await getUserByEmail(normalizeEmail(parsed.data.email));
+    const identifier = parsed.data.identifier;
+    const user = identifier.includes("@")
+      ? await getUserByEmail(normalizeEmail(identifier))
+      : await getUserByPhone(normalizePhone(identifier));
     if (!user?.passwordHash || !(await verifyPassword(parsed.data.password, user.passwordHash))) {
       res.status(401).json({ error: "البريد أو كلمة المرور غير صحيحة" });
       return;
@@ -221,6 +238,24 @@ export function registerEmailAuthRoutes(app: Express) {
       console.error("[EmailAuth] Verification email delivery failed");
     }
     res.json({ success: true, message: "إذا كان الحساب غير مؤكد فستصلك رسالة تأكيد جديدة قريبًا." });
+  });
+
+  app.post("/api/auth/email/verify-otp", async (req, res) => {
+    const parsed = verifyOtpSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "أدخل رمز التحقق المكوّن من 6 أرقام" });
+      return;
+    }
+    const user = await getUserByEmail(normalizeEmail(parsed.data.email));
+    const authToken = user ? await getActiveAuthToken(hashToken(parsed.data.code), "email_verification") : undefined;
+    if (!user || !authToken || authToken.userId !== user.id) {
+      res.status(400).json({ error: "رمز التحقق غير صحيح أو منتهي" });
+      return;
+    }
+    await markUserEmailVerified(user.id);
+    await markAuthTokenUsed(authToken.id);
+    const currentUser = (await getUserById(user.id)) ?? user;
+    await establishSession(req, res, currentUser);
   });
 
   app.post("/api/auth/email/reset-password", async (req, res) => {

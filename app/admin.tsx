@@ -74,7 +74,7 @@ function AdminContent() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.headerRow}><Pressable onPress={() => router.back()}><Text style={styles.back}>رجوع</Text></Pressable><View><Text style={styles.title}>لوحة إدارة مصلاي</Text><Text style={styles.subtitle}>لوحة ويب مستقلة لإدارة الأماكن والتعليقات والمحتوى</Text></View></View>
+        <View style={styles.headerRow}><Pressable onPress={() => router.back()}><Text style={styles.back}>رجوع</Text></Pressable><View><Text style={styles.title}>لوحة إدارة محرابي</Text><Text style={styles.subtitle}>لوحة ويب مستقلة لإدارة الأماكن والتعليقات والمحتوى</Text></View></View>
         {!me.isLoading && !isAdmin && <View style={styles.loginCard}>
           <Text style={styles.loginTitle}>{me.data ? "هذا الحساب لا يملك صلاحية الإدارة" : "دخول المدير"}</Text>
           <Text style={styles.loginHint}>استخدم حساب المدير للوصول إلى لوحة المراجعة. لا يلزم تسجيل دخول المدير داخل تطبيق الهاتف.</Text>
