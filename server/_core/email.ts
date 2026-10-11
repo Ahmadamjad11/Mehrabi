@@ -42,9 +42,10 @@ function getTransporter() {
 
 async function sendSystemEmail(input: { to: string; subject: string; text: string; html: string }) {
   const user = process.env.SMTP_USER;
-  if (!user) throw new Error("SMTP production secrets are not configured");
+  const from = process.env.SMTP_FROM?.trim();
+  if (!user || !from || !from.includes("@")) throw new Error("SMTP production sender is not configured");
   await getTransporter().sendMail({
-    from: process.env.SMTP_FROM || `مصلاي <${user}>`,
+    from: `مِحرابي <${from}>`,
     to: input.to,
     subject: input.subject,
     text: input.text,

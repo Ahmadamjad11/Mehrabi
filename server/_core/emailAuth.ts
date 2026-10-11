@@ -182,7 +182,7 @@ export function registerEmailAuthRoutes(app: Express) {
       await issueVerificationEmail(user);
       res.status(201).json({ success: true, requiresEmailVerification: true, message: "تم إنشاء الحساب. افحص بريدك لتأكيد الحساب." });
     } catch (error) {
-      console.error("[EmailAuth] Registration email delivery failed");
+      console.error("[EmailAuth] Registration email delivery failed", error instanceof Error ? error.message : "unknown error");
       res.status(503).json({ error: "تعذر إرسال رسالة التأكيد حاليًا. حاول مرة أخرى لاحقًا." });
     }
   });
@@ -219,8 +219,8 @@ export function registerEmailAuthRoutes(app: Express) {
     try {
       const user = await getUserByEmail(normalizeEmail(parsed.data.email));
       if (user?.passwordHash && user.email) await issueResetEmail(user);
-    } catch {
-      console.error("[EmailAuth] Password reset email delivery failed");
+    } catch (error) {
+      console.error("[EmailAuth] Password reset email delivery failed", error instanceof Error ? error.message : "unknown error");
     }
     res.json({ success: true, message: "إذا كان البريد مسجلًا لدينا فستصلك رسالة الاستعادة قريبًا." });
   });
@@ -234,8 +234,8 @@ export function registerEmailAuthRoutes(app: Express) {
     try {
       const user = await getUserByEmail(normalizeEmail(parsed.data.email));
       if (user?.passwordHash && user.email && !user.emailVerifiedAt) await issueVerificationEmail(user);
-    } catch {
-      console.error("[EmailAuth] Verification email delivery failed");
+    } catch (error) {
+      console.error("[EmailAuth] Verification email delivery failed", error instanceof Error ? error.message : "unknown error");
     }
     res.json({ success: true, message: "إذا كان الحساب غير مؤكد فستصلك رسالة تأكيد جديدة قريبًا." });
   });
