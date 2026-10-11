@@ -151,6 +151,7 @@ function getQueryToken(req: Request) {
 
 export function registerEmailAuthRoutes(app: Express) {
   app.post("/api/auth/email/register", async (req, res) => {
+    console.log("[EmailAuth] Registration request received");
     const parsed = registerSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "الاسم ورقم الهاتف والبريد وكلمة المرور غير صالحة" });
@@ -188,6 +189,7 @@ export function registerEmailAuthRoutes(app: Express) {
   });
 
   app.post("/api/auth/email/login", async (req, res) => {
+    console.log("[EmailAuth] Login request received");
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "البريد/الهاتف أو كلمة المرور غير صالحة" });
@@ -226,6 +228,7 @@ export function registerEmailAuthRoutes(app: Express) {
   });
 
   app.post("/api/auth/email/resend-verification", async (req, res) => {
+    console.log("[EmailAuth] Verification resend request received");
     const parsed = forgotSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "أدخل بريدًا إلكترونيًا صالحًا" });
