@@ -46,10 +46,13 @@ function getTransporter() {
 async function sendSystemEmail(input: { to: string; subject: string; text: string; html: string }) {
   const user = process.env.SMTP_USER;
   const from = process.env.SMTP_FROM?.trim();
-  if (!user || !from || !from.includes("@")) throw new Error("SMTP production sender is not configured");
+  if (!user) throw new Error("SMTP production sender is not configured");
   console.log(`[Email] Sending message through SMTP on port ${Number(process.env.SMTP_PORT || "587")}`);
   const result = await getTransporter().sendMail({
-    from: `مِحرابي <${from}>`,
+    // Use the authenticated SMTP mailbox as the envelope sender. Some providers
+    // accept a different From header but silently suppress delivery afterward.
+    from: `مِحرابي <${user}>`,
+    replyTo: from && from.includes("@") ? from : user,
     to: input.to,
     subject: input.subject,
     text: input.text,
