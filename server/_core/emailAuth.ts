@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
@@ -11,6 +11,7 @@ import {
   getUserById,
   markAuthTokenUsed,
   markUserEmailVerified,
+  invalidateActiveAuthTokens,
   updateUserPassword,
   upsertUser,
 } from "../db";
@@ -66,7 +67,7 @@ function createRawToken() {
 }
 
 function createOtpCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(randomInt(100000, 1000000));
 }
 
 function hashToken(token: string) {
@@ -114,6 +115,7 @@ function htmlPage(title: string, message: string, status = 200, form?: string) {
 async function issueVerificationEmail(user: NonNullable<Awaited<ReturnType<typeof getUserById>>>) {
   if (!user.email) throw new Error("Email is required");
   const rawToken = createOtpCode();
+  await invalidateActiveAuthTokens(user.id, "email_verification");
   await createAuthToken({
     userId: user.id,
     tokenHash: hashToken(rawToken),

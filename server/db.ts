@@ -165,6 +165,12 @@ export async function createAuthToken(input: {
   await db.insert(authTokens).values(input);
 }
 
+export async function invalidateActiveAuthTokens(userId: number, type: "email_verification" | "password_reset") {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  await db.update(authTokens).set({ usedAt: new Date() }).where(and(eq(authTokens.userId, userId), eq(authTokens.type, type), isNull(authTokens.usedAt)));
+}
+
 export async function getActiveAuthToken(tokenHash: string, type: "email_verification" | "password_reset") {
   const db = await getDb();
   if (!db) return undefined;
