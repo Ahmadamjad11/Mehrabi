@@ -253,6 +253,7 @@ export default function HomeScreen() {
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
+  const [prayerTimesVisible, setPrayerTimesVisible] = useState(false);
   const [placeName, setPlaceName] = useState("");
   const [placeAddress, setPlaceAddress] = useState("");
   const [placeType, setPlaceType] = useState<"mosque" | "musalla">("mosque");
@@ -797,29 +798,8 @@ export default function HomeScreen() {
           <View style={styles.progressTrack}><View style={styles.progressFill} /></View>
           <View style={styles.prayerFooter}>
             <Text style={styles.nextHint}>{ui.prayerHint}</Text>
-            <Text style={styles.prayerLink}>{ui.prayerTimes}</Text>
+            <Pressable onPress={() => setPrayerTimesVisible(true)} style={styles.prayerTimesButton}><Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text></Pressable>
           </View>
-        </View>
-
-        <View style={styles.dailyPrayersHeader}>
-          <View style={styles.dailyPrayersTitleRow}>
-            <Text style={styles.dailyPrayersTitle}>{ui.prayerTimes}</Text>
-            <View style={styles.dailyPrayersDate}><Ionicons name="calendar-outline" size={13} color={COLORS.teal} /><Text style={styles.dailyPrayersDateText}>{formatClock(now, language).split(" ")[0]} · {language === "ar" ? "اليوم" : "Today"}</Text></View>
-          </View>
-          <Text style={styles.dailyPrayersHint}>{language === "ar" ? "مواقيت اليوم في مكان واحد" : "Today's prayer times at a glance"}</Text>
-        </View>
-        <View style={styles.dailyPrayersGrid}>
-          {getPrayerSchedule(now, userLocation).map(([name, time]) => {
-            const isNext = name === prayerState.name;
-            return (
-              <View key={name} style={[styles.dailyPrayerTile, isNext && styles.dailyPrayerTileActive]}>
-                <View style={[styles.dailyPrayerIcon, isNext && styles.dailyPrayerIconActive]}><Ionicons name={name === "الفجر" ? "sunny-outline" : name === "المغرب" || name === "العشاء" ? "moon-outline" : "sunny-outline"} size={17} color={isNext ? COLORS.gold : COLORS.teal} /></View>
-                <Text style={[styles.dailyPrayerName, isNext && styles.dailyPrayerNameActive]}>{localizePrayerName(name, language)}</Text>
-                <Text style={[styles.dailyPrayerTime, isNext && styles.dailyPrayerTimeActive]}>{formatClock(time, language)}</Text>
-                {isNext && <View style={styles.nextPrayerBadge}><Text style={styles.nextPrayerBadgeText}>{language === "ar" ? "القادمة" : "Next"}</Text></View>}
-              </View>
-            );
-          })}
         </View>
 
         <View style={styles.quickActions}>
@@ -952,6 +932,24 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
+      <Modal visible={prayerTimesVisible} animationType="slide" transparent onRequestClose={() => setPrayerTimesVisible(false)}>
+        <View style={styles.modalBackdrop}><View style={styles.modalCard}>
+          <Pressable style={styles.modalClose} onPress={() => setPrayerTimesVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
+          <View style={styles.dailyPrayersHeader}>
+            <View style={styles.dailyPrayersTitleRow}>
+              <Text style={styles.dailyPrayersTitle}>{ui.prayerTimes}</Text>
+              <View style={styles.dailyPrayersDate}><Ionicons name="calendar-outline" size={13} color={COLORS.teal} /><Text style={styles.dailyPrayersDateText}>{language === "ar" ? "اليوم" : "Today"}</Text></View>
+            </View>
+            <Text style={styles.dailyPrayersHint}>{language === "ar" ? "مواقيت اليوم في مكان واحد" : "Today's prayer times at a glance"}</Text>
+          </View>
+          <View style={styles.dailyPrayersGrid}>
+            {getPrayerSchedule(now, userLocation).map(([name, time]) => {
+              const isNext = name === prayerState.name;
+              return <View key={name} style={[styles.dailyPrayerTile, isNext && styles.dailyPrayerTileActive]}><View style={[styles.dailyPrayerIcon, isNext && styles.dailyPrayerIconActive]}><Ionicons name={name === "المغرب" || name === "العشاء" ? "moon-outline" : "sunny-outline"} size={17} color={isNext ? COLORS.gold : COLORS.teal} /></View><Text style={[styles.dailyPrayerName, isNext && styles.dailyPrayerNameActive]}>{localizePrayerName(name, language)}</Text><Text style={[styles.dailyPrayerTime, isNext && styles.dailyPrayerTimeActive]}>{formatClock(time, language)}</Text>{isNext && <View style={styles.nextPrayerBadge}><Text style={styles.nextPrayerBadgeText}>{language === "ar" ? "القادمة" : "Next"}</Text></View>}</View>;
+            })}
+          </View>
+        </View></View>
+      </Modal>
       <Modal visible={emailAuthVisible} animationType="slide" transparent onRequestClose={() => setEmailAuthVisible(false)}>
         <View style={styles.modalBackdrop}><View style={styles.modalCard}>
           <Pressable style={styles.modalClose} onPress={() => setEmailAuthVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
@@ -1053,6 +1051,7 @@ const styles = StyleSheet.create({
   prayerFooter: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
   nextHint: { color: "#8BA4B8", fontSize: 10 },
   prayerLink: { color: COLORS.gold, fontSize: 11, fontWeight: "700" },
+  prayerTimesButton: { paddingVertical: 4, paddingHorizontal: 2 },
   dailyPrayersHeader: { marginTop: 3, marginBottom: 10 },
   dailyPrayersTitleRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between" },
   dailyPrayersTitle: { color: COLORS.navy, fontSize: 17, fontWeight: "900", textAlign: "right" },
