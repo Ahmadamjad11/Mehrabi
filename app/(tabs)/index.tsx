@@ -797,10 +797,29 @@ export default function HomeScreen() {
           <View style={styles.progressTrack}><View style={styles.progressFill} /></View>
           <View style={styles.prayerFooter}>
             <Text style={styles.nextHint}>{ui.prayerHint}</Text>
-              <Pressable onPress={() => Alert.alert(ui.prayerTimes, getPrayerSchedule(now, userLocation).map(([name, time]) => `${localizePrayerName(name, language)}: ${formatClock(time, language)}`).join("\n"))}>
-              <Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text>
-            </Pressable>
+            <Text style={styles.prayerLink}>{ui.prayerTimes}</Text>
           </View>
+        </View>
+
+        <View style={styles.dailyPrayersHeader}>
+          <View style={styles.dailyPrayersTitleRow}>
+            <Text style={styles.dailyPrayersTitle}>{ui.prayerTimes}</Text>
+            <View style={styles.dailyPrayersDate}><Ionicons name="calendar-outline" size={13} color={COLORS.teal} /><Text style={styles.dailyPrayersDateText}>{formatClock(now, language).split(" ")[0]} · {language === "ar" ? "اليوم" : "Today"}</Text></View>
+          </View>
+          <Text style={styles.dailyPrayersHint}>{language === "ar" ? "مواقيت اليوم في مكان واحد" : "Today's prayer times at a glance"}</Text>
+        </View>
+        <View style={styles.dailyPrayersGrid}>
+          {getPrayerSchedule(now, userLocation).map(([name, time]) => {
+            const isNext = name === prayerState.name;
+            return (
+              <View key={name} style={[styles.dailyPrayerTile, isNext && styles.dailyPrayerTileActive]}>
+                <View style={[styles.dailyPrayerIcon, isNext && styles.dailyPrayerIconActive]}><Ionicons name={name === "الفجر" ? "sunny-outline" : name === "المغرب" || name === "العشاء" ? "moon-outline" : "sunny-outline"} size={17} color={isNext ? COLORS.gold : COLORS.teal} /></View>
+                <Text style={[styles.dailyPrayerName, isNext && styles.dailyPrayerNameActive]}>{localizePrayerName(name, language)}</Text>
+                <Text style={[styles.dailyPrayerTime, isNext && styles.dailyPrayerTimeActive]}>{formatClock(time, language)}</Text>
+                {isNext && <View style={styles.nextPrayerBadge}><Text style={styles.nextPrayerBadgeText}>{language === "ar" ? "القادمة" : "Next"}</Text></View>}
+              </View>
+            );
+          })}
         </View>
 
         <View style={styles.quickActions}>
@@ -1034,6 +1053,23 @@ const styles = StyleSheet.create({
   prayerFooter: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
   nextHint: { color: "#8BA4B8", fontSize: 10 },
   prayerLink: { color: COLORS.gold, fontSize: 11, fontWeight: "700" },
+  dailyPrayersHeader: { marginTop: 3, marginBottom: 10 },
+  dailyPrayersTitleRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between" },
+  dailyPrayersTitle: { color: COLORS.navy, fontSize: 17, fontWeight: "900", textAlign: "right" },
+  dailyPrayersDate: { flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: "#EAF6F4", borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 },
+  dailyPrayersDateText: { color: COLORS.teal, fontSize: 10, fontWeight: "800" },
+  dailyPrayersHint: { color: COLORS.muted, fontSize: 10, textAlign: "right", marginTop: 4 },
+  dailyPrayersGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 8, marginBottom: 20 },
+  dailyPrayerTile: { width: "30%", minHeight: 105, backgroundColor: COLORS.white, borderRadius: 17, padding: 10, alignItems: "flex-end", borderWidth: 1, borderColor: COLORS.line, shadowColor: COLORS.navy, shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
+  dailyPrayerTileActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy, shadowOpacity: 0.16 },
+  dailyPrayerIcon: { width: 31, height: 31, borderRadius: 11, backgroundColor: "#E7F6F3", alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  dailyPrayerIconActive: { backgroundColor: "rgba(243,180,75,0.18)" },
+  dailyPrayerName: { color: COLORS.muted, fontSize: 11, fontWeight: "800", textAlign: "right" },
+  dailyPrayerNameActive: { color: "#B6CAD9" },
+  dailyPrayerTime: { color: COLORS.navy, fontSize: 15, fontWeight: "900", marginTop: 4, textAlign: "right" },
+  dailyPrayerTimeActive: { color: COLORS.white },
+  nextPrayerBadge: { position: "absolute", left: 8, bottom: 8, backgroundColor: COLORS.gold, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2 },
+  nextPrayerBadgeText: { color: COLORS.navy, fontSize: 8, fontWeight: "900" },
   quickActions: { flexDirection: "row-reverse", gap: 9, marginBottom: 27 },
   quickAction: { flex: 1, minHeight: 101, backgroundColor: COLORS.white, borderRadius: 18, padding: 11, alignItems: "flex-end", borderWidth: 1, borderColor: COLORS.line, shadowColor: COLORS.navy, shadowOpacity: 0.05, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
   quickIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 8 },
