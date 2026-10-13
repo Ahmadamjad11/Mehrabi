@@ -127,7 +127,7 @@ const schedulePrayerReminders = async (minutesBefore: number, location: { lat: n
   const ids: string[] = [];
   const scheduledKeys = new Set<string>();
   const firstJordanDate = getJordanCalendarDate(now);
-  for (let dayOffset = 0; dayOffset < 8; dayOffset += 1) {
+  for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
     // Advance the Jordan calendar exactly once. The previous implementation
     // converted an already-advanced date and then advanced it again, skipping
     // every other day and leaving gaps in the reminder sequence.
@@ -143,6 +143,7 @@ const schedulePrayerReminders = async (minutesBefore: number, location: { lat: n
         content: {
           title: "تذكير من محرابي",
           body: `باقي ${minutesBefore} دقيقة على صلاة ${name}. هل صليت الصلاة السابقة؟`,
+          sound: "default",
           categoryIdentifier: PRAYER_REMINDER_CATEGORY,
           data: { prayerName: name, reminderKey },
         },
@@ -187,6 +188,12 @@ const formatClock = (date: Date, language: "ar" | "en") =>
 const localizePrayerName = (name: string, language: "ar" | "en") => {
   if (language === "ar") return name;
   return ({ الفجر: "Fajr", الظهر: "Dhuhr", الجمعة: "Jumu'ah", العصر: "Asr", المغرب: "Maghrib", العشاء: "Isha" } as Record<string, string>)[name] ?? name;
+};
+
+const getDynamicGreeting = (date: Date, language: "ar" | "en") => {
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: JORDAN_TIME_ZONE, hour: "numeric", hour12: false }).format(date));
+  if (language === "ar") return hour < 12 ? "صباح النور" : hour < 18 ? "مساء الخير" : "ليلة هادئة";
+  return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 };
 
 const formatCountdown = (target: Date, now: Date) => {
@@ -346,6 +353,7 @@ export default function HomeScreen() {
           content: {
             title: "تذكير من محرابي",
             body: "تذكيرك المؤجل للصلاة",
+            sound: "default",
             categoryIdentifier: PRAYER_REMINDER_CATEGORY,
             data: { deferred: true },
           },
@@ -377,6 +385,20 @@ export default function HomeScreen() {
         reminderSchedulingRef.current = false;
       });
   }, [now, remindersEnabled, reminderMinutes, userLocation]);
+
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active" && remindersEnabled && !reminderSchedulingRef.current) {
+        reminderScheduleKeyRef.current = null;
+        reminderSchedulingRef.current = true;
+        void schedulePrayerReminders(reminderMinutes, userLocation).finally(() => {
+          reminderSchedulingRef.current = false;
+        });
+      }
+    });
+    return () => subscription.remove();
+  }, [remindersEnabled, reminderMinutes, userLocation]);
 
   useEffect(() => {
     // Reset the cursor and accumulated server pages when the search/filter key changes.
@@ -640,11 +662,9 @@ export default function HomeScreen() {
     setEmailAuthError(null);
     setEmailAuthMessage(null);
     try {
-      const endpoint = emailAuthNeedsOtp ? "verify-otp" : emailAuthMode === "register" ? "register" : emailAuthMode === "forgot" ? "forgot-password" : "login";
+      const endpoint = emailAuthMode === "register" ? "register" : emailAuthMode === "forgot" ? "forgot-password" : "login";
       const body = emailAuthMode === "register"
         ? { name: emailAuthName, phone: emailAuthPhone, email: emailAuthEmail, password: emailAuthPassword }
-        : emailAuthNeedsOtp
-          ? { email: emailAuthEmail, code: emailAuthOtp }
         : emailAuthMode === "forgot"
           ? { email: emailAuthEmail }
           : { identifier: emailAuthEmail, password: emailAuthPassword };
@@ -656,25 +676,12 @@ export default function HomeScreen() {
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string; app_session_id?: string; code?: string };
       if (!response.ok) {
-        if (payload.code === "EMAIL_NOT_VERIFIED") {
-          setEmailAuthCanResend(true);
-          setEmailAuthNeedsOtp(true);
-          throw new Error(ui.verifyHint);
-        }
         throw new Error(payload.error || (language === "ar" ? "تعذر إكمال العملية." : "Unable to complete the request."));
       }
-      if (emailAuthNeedsOtp) {
+      if (emailAuthMode === "login" || emailAuthMode === "register") {
         if (payload.app_session_id) await Auth.setSessionToken(payload.app_session_id);
         await meQuery.refetch();
         setEmailAuthVisible(false);
-      } else if (emailAuthMode === "login") {
-        if (payload.app_session_id) await Auth.setSessionToken(payload.app_session_id);
-        await meQuery.refetch();
-        setEmailAuthVisible(false);
-      } else if (emailAuthMode === "register") {
-        setEmailAuthNeedsOtp(true);
-        setEmailAuthCanResend(true);
-        setEmailAuthMessage(language === "ar" ? "أرسلنا رمزًا من 6 أرقام إلى بريدك. أدخله هنا لتفعيل الحساب." : "We sent a 6-digit code to your email. Enter it here to activate your account.");
       } else {
         setEmailAuthMessage(ui.resetSent);
       }
@@ -757,7 +764,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.greetingBlock}>
-          <View style={styles.greetingPill}><View style={styles.greetingDot} /><Text style={styles.eyebrow}>{ui.greeting}</Text></View>
+            <View style={styles.greetingPill}><View style={styles.greetingDot} /><Text style={styles.eyebrow}>{getDynamicGreeting(now, language)}</Text></View>
           <Text style={styles.title}>{ui.title}</Text>
           <Text style={styles.heroHint}>{language === "ar" ? "محرابك معك في كل طريق" : "Your prayer space, wherever you go"}</Text>
         </View>
@@ -862,7 +869,7 @@ export default function HomeScreen() {
             </View>
             <View style={styles.placeActions}>
               <Pressable onPress={() => toggleFavorite(place.id)} style={styles.iconAction}><Ionicons name={favorites.includes(place.id) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.id) ? COLORS.red : COLORS.muted} /></Pressable>
-              <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else beginLogin(); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>
+              <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else openEmailAuth("login"); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>
               <Pressable onPress={() => sharePlace(place)} style={styles.iconAction}><Ionicons name="share-social-outline" size={18} color={COLORS.muted} /></Pressable>
               <Pressable onPress={() => openMaps(place)} style={styles.goButton}><Ionicons name="navigate" size={16} color={COLORS.white} /><Text style={styles.goText}>{language === "ar" ? "الطريق" : "Directions"}</Text></Pressable>
             </View>

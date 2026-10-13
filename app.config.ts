@@ -62,7 +62,7 @@ const publicRuntime = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.7",
+  version: "1.0.8",
   extra: {
     ...publicRuntime,
     eas: {

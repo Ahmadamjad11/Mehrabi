@@ -50,6 +50,13 @@
       "when": 1791713711510,
       "tag": "0006_natural_reavers",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1791861610062,
+      "tag": "0007_moaning_purifiers",
+      "breakpoints": true
     }
   ]
 }

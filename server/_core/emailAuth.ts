@@ -164,13 +164,8 @@ export function registerEmailAuthRoutes(app: Express) {
     try {
       const existing = await getUserByEmail(email);
       const existingPhone = await getUserByPhone(phone);
-      if (existing?.passwordHash && !existing.emailVerifiedAt) {
-        await issueVerificationEmail(existing);
-        res.status(200).json({ success: true, requiresEmailVerification: true, message: "تم إرسال رسالة تأكيد جديدة إلى بريدك." });
-        return;
-      }
       if (existing || existingPhone) {
-        res.status(409).json({ error: "يوجد حساب بهذا البريد الإلكتروني" });
+        res.status(409).json({ error: existingPhone ? "رقم الهاتف مستخدم في حساب آخر" : "البريد الإلكتروني مستخدم في حساب آخر" });
         return;
       }
       const userId = await createEmailUser({
@@ -182,11 +177,12 @@ export function registerEmailAuthRoutes(app: Express) {
       });
       const user = await getUserById(userId);
       if (!user) throw new Error("Created user was not found");
-      await issueVerificationEmail(user);
-      res.status(201).json({ success: true, requiresEmailVerification: true, message: "تم إنشاء الحساب. افحص بريدك لتأكيد الحساب." });
+      await markUserEmailVerified(user.id);
+      const currentUser = (await getUserById(user.id)) ?? user;
+      await establishSession(req, res, currentUser);
     } catch (error) {
-      console.error("[EmailAuth] Registration email delivery failed", error instanceof Error ? error.message : "unknown error");
-      res.status(503).json({ error: "تعذر إرسال رسالة التأكيد حاليًا. حاول مرة أخرى لاحقًا." });
+      console.error("[EmailAuth] Registration failed", error instanceof Error ? error.message : "unknown error");
+      res.status(500).json({ error: "تعذر إنشاء الحساب حاليًا. حاول مرة أخرى لاحقًا." });
     }
   });
 
@@ -203,10 +199,6 @@ export function registerEmailAuthRoutes(app: Express) {
       : await getUserByPhone(normalizePhone(identifier));
     if (!user?.passwordHash || !(await verifyPassword(parsed.data.password, user.passwordHash))) {
       res.status(401).json({ error: "البريد أو كلمة المرور غير صحيحة" });
-      return;
-    }
-    if (!user.emailVerifiedAt) {
-      res.status(403).json({ code: "EMAIL_NOT_VERIFIED", error: "أكد بريدك الإلكتروني أولًا من الرسالة التي أرسلناها لك." });
       return;
     }
     await upsertUser({ openId: user.openId, lastSignedIn: new Date() });
