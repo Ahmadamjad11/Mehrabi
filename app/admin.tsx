@@ -40,7 +40,7 @@ function AdminContent() {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-client-platform": Platform.OS === "web" ? "web" : "native" },
         credentials: "include",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ identifier: email, password }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string; app_session_id?: string };
       if (!response.ok) throw new Error(payload.error || "تعذر تسجيل الدخول");
