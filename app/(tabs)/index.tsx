@@ -173,8 +173,11 @@ const getJordanCalendarDate = (value: Date) => {
 };
 
 const getPrayerSchedule = (now: Date, location: { lat: number; lng: number } | null) => {
-  const params = CalculationMethod.MuslimWorldLeague();
+  // Jordan calibration: the Ministry of Awqaf timetable is closest to the
+  // Karachi angles, with local minute adjustments for Amman/Jordan.
+  const params = CalculationMethod.Karachi();
   params.madhab = Madhab.Shafi;
+  params.adjustments = { fajr: 0, sunrise: 0, dhuhr: -1, asr: 1, maghrib: 6, isha: 0 };
   const jordanDate = getJordanCalendarDate(now);
   const times = new PrayerTimes(new Coordinates(location?.lat ?? 31.9539, location?.lng ?? 35.9106), jordanDate, params);
   return [
