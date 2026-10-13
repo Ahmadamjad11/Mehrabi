@@ -337,16 +337,7 @@ export default function HomeScreen() {
   useEffect(() => {
     if (Platform.OS === "web") return;
     let responseSubscription: Notifications.EventSubscription | undefined;
-    void (async () => {
-      const stored = await AsyncStorage.getItem(REMINDER_SETTINGS_KEY);
-      const settings = stored ? JSON.parse(stored) as { enabled?: boolean; minutes?: 15 | 30 | 45 } : undefined;
-      const enabled = settings?.enabled === true;
-      const minutes = settings?.minutes === 15 || settings?.minutes === 45 ? settings.minutes : 30;
-      setRemindersEnabled(enabled);
-      setReminderMinutes(minutes);
-      reminderSettingsLoadedRef.current = true;
-    })();
-    responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
+    const handleNotificationResponse = (response: Notifications.NotificationResponse) => {
       const id = response.notification.request.identifier;
       if (response.actionIdentifier === PRAYER_LATER_ACTION) {
         void Notifications.scheduleNotificationAsync({
@@ -365,7 +356,22 @@ export default function HomeScreen() {
         });
       }
       void Notifications.dismissNotificationAsync(id).catch(() => undefined);
-    });
+    };
+    void (async () => {
+      const stored = await AsyncStorage.getItem(REMINDER_SETTINGS_KEY);
+      const settings = stored ? JSON.parse(stored) as { enabled?: boolean; minutes?: 15 | 30 | 45 } : undefined;
+      const enabled = settings?.enabled === true;
+      const minutes = settings?.minutes === 15 || settings?.minutes === 45 ? settings.minutes : 30;
+      setRemindersEnabled(enabled);
+      setReminderMinutes(minutes);
+      reminderSettingsLoadedRef.current = true;
+      const lastResponse = await Notifications.getLastNotificationResponseAsync();
+      if (lastResponse) {
+        handleNotificationResponse(lastResponse);
+        await Notifications.clearLastNotificationResponseAsync();
+      }
+    })();
+    responseSubscription = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
     return () => responseSubscription?.remove();
   }, []);
 
