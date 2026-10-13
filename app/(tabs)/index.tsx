@@ -111,8 +111,12 @@ const configurePrayerNotifications = async () => {
 };
 
 const clearPrayerReminderSchedule = async () => {
-  // Also clear orphaned schedules from older builds/racing reschedules.
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  // Cancel only prayer-time reminders. Deferred ten-minute reminders must
+  // survive the foreground reschedule triggered when an action opens the app.
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(scheduled
+    .filter((item) => item.content.categoryIdentifier === PRAYER_REMINDER_CATEGORY && !(item.content.data as { deferred?: boolean } | undefined)?.deferred)
+    .map((item) => Notifications.cancelScheduledNotificationAsync(item.identifier)));
   const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
   if (!stored) return;
   const ids = JSON.parse(stored) as string[];
