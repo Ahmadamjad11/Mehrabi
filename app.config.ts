@@ -116,7 +116,7 @@ const config: ExpoConfig = {
     [
       "expo-notifications",
       {
-        sounds: ["./assets/mehrabi-reminder.wav"],
+        sounds: ["./assets/mehrabi_reminder.wav"],
       },
     ],
     [
