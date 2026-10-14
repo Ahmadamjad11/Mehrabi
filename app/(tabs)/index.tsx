@@ -75,10 +75,8 @@ const JORDAN_TIME_ZONE = "Asia/Amman";
 const REMINDER_SETTINGS_KEY = "maslay.prayer-reminders.v1";
 const REMINDER_IDS_KEY = "maslay.prayer-reminder-ids.v1";
 const PLACES_CACHE_KEY = "maslay.places-cache.v1";
-const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v2";
-const PRAYER_REMINDER_CATEGORY = "prayer_reminder";
-const PRAYER_DONE_ACTION = "prayer_done";
-const PRAYER_LATER_ACTION = "prayer_later";
+const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v3";
+const PRAYER_REMINDER_SOUND = "mehrabi-reminder.wav";
 
 if (Notifications.setNotificationHandler) {
   Notifications.setNotificationHandler({
@@ -98,15 +96,9 @@ const configurePrayerNotifications = async () => {
       name: "تذكيرات الصلاة مع صوت",
       importance: Notifications.AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250, 250, 250],
-      sound: "default",
+      sound: PRAYER_REMINDER_SOUND,
     });
   }
-  await Notifications.setNotificationCategoryAsync(PRAYER_REMINDER_CATEGORY, [
-    // Foregrounding the app is required when it was killed; otherwise the
-    // response listener cannot receive the action on Android.
-    { identifier: PRAYER_DONE_ACTION, buttonTitle: "نعم، صليت", options: { opensAppToForeground: true } },
-    { identifier: PRAYER_LATER_ACTION, buttonTitle: "ذكّرني بعد 10 دقائق", options: { opensAppToForeground: true } },
-  ]);
   return true;
 };
 
@@ -115,7 +107,7 @@ const clearPrayerReminderSchedule = async () => {
   // survive the foreground reschedule triggered when an action opens the app.
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   await Promise.all(scheduled
-    .filter((item) => item.content.categoryIdentifier === PRAYER_REMINDER_CATEGORY && !(item.content.data as { deferred?: boolean } | undefined)?.deferred)
+    .filter((item) => item.trigger && (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
     .map((item) => Notifications.cancelScheduledNotificationAsync(item.identifier)));
   const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
   if (!stored) return;
@@ -145,11 +137,10 @@ const schedulePrayerReminders = async (minutesBefore: number, location: { lat: n
       scheduledKeys.add(reminderKey);
       const id = await Notifications.scheduleNotificationAsync({
         content: {
-          title: "تذكير من محرابي",
-          body: `باقي ${minutesBefore} دقيقة على صلاة ${name}. هل صليت الصلاة السابقة؟`,
-          sound: "default",
-          categoryIdentifier: PRAYER_REMINDER_CATEGORY,
-          data: { prayerName: name, reminderKey },
+          title: "نداء محرابي",
+          body: `باقي ${minutesBefore} دقيقة على صلاة ${name} — استعد للصلاة.`,
+          sound: PRAYER_REMINDER_SOUND,
+          data: { prayerName: name, reminderKey, prayerReminder: true },
         },
         trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
       });
@@ -347,22 +338,6 @@ export default function HomeScreen() {
     let responseSubscription: Notifications.EventSubscription | undefined;
     const handleNotificationResponse = (response: Notifications.NotificationResponse) => {
       const id = response.notification.request.identifier;
-      if (response.actionIdentifier === PRAYER_LATER_ACTION) {
-        void Notifications.scheduleNotificationAsync({
-          content: {
-            title: "تذكير من محرابي",
-            body: "تذكيرك المؤجل للصلاة",
-            sound: "default",
-            categoryIdentifier: PRAYER_REMINDER_CATEGORY,
-            data: { deferred: true },
-          },
-          trigger: {
-            type: Notifications.SchedulableTriggerInputTypes.DATE,
-            date: new Date(Date.now() + 10 * 60 * 1000),
-            channelId: PRAYER_REMINDER_CHANNEL,
-          },
-        });
-      }
       void Notifications.dismissNotificationAsync(id).catch(() => undefined);
     };
     void (async () => {

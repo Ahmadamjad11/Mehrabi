@@ -62,7 +62,7 @@ const publicRuntime = {
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.13",
+  version: "1.0.14",
   extra: {
     ...publicRuntime,
     eas: {
@@ -112,7 +112,12 @@ const config: ExpoConfig = {
   plugins: [
     "expo-asset",
     "expo-router",
-    "expo-notifications",
+    [
+      "expo-notifications",
+      {
+        sounds: ["./assets/mehrabi-reminder.wav"],
+      },
+    ],
     [
       "expo-location",
       {
