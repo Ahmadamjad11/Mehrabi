@@ -76,7 +76,7 @@ const REMINDER_SETTINGS_KEY = "maslay.prayer-reminders.v1";
 const REMINDER_IDS_KEY = "maslay.prayer-reminder-ids.v1";
 const PLACES_CACHE_KEY = "maslay.places-cache.v1";
 const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v3";
-const PRAYER_REMINDER_SOUND = "mehrabi-reminder.wav";
+const PRAYER_REMINDER_SOUND = "mehrabi_reminder.wav";
 
 if (Notifications.setNotificationHandler) {
   Notifications.setNotificationHandler({
