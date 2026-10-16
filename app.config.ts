@@ -23,7 +23,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 
 const env = {
   appName: "محرابي",
-  appSlug: "maslay",
+  appSlug: "mihrabi",
   logoUrl: "",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
