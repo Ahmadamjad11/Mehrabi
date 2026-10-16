@@ -66,7 +66,7 @@ const config: ExpoConfig = {
   extra: {
     ...publicRuntime,
     eas: {
-      projectId: "848e3e97-c347-4df4-9eff-3d07555d3236",
+      projectId: "eeec3d28-d421-4535-9a61-1b075188bf86",
     },
   },
   orientation: "portrait",
