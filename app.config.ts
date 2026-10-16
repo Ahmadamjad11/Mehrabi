@@ -66,7 +66,7 @@ const config: ExpoConfig = {
   extra: {
     ...publicRuntime,
     eas: {
-      projectId: "eeec3d20-d421-4535-9a61-1b075108bf86",
+      projectId: "eeec3d20-d421-4535-9a41-1b075188bf86",
     },
   },
   orientation: "portrait",
@@ -142,7 +142,7 @@ const config: ExpoConfig = {
       "expo-splash-screen",
       {
         image: "./assets/images/splash-icon.png",
-        imageWidth: 200,
+      imageWidth: 200,
         resizeMode: "contain",
         backgroundColor: "#F7F9FA",
         dark: {
