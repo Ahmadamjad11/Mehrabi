@@ -25,6 +25,7 @@ import { WebView } from "react-native-webview";
 import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
+import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const COLORS = {
@@ -118,36 +119,41 @@ const clearPrayerReminderSchedule = async () => {
 
 const schedulePrayerReminders = async (minutesBefore: number, location: { lat: number; lng: number } | null) => {
   if (Platform.OS === "web") return;
-  await clearPrayerReminderSchedule();
-  const now = new Date();
   const ids: string[] = [];
-  const scheduledKeys = new Set<string>();
-  const firstJordanDate = getJordanCalendarDate(now);
-  for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
-    // Advance the Jordan calendar exactly once. The previous implementation
-    // converted an already-advanced date and then advanced it again, skipping
-    // every other day and leaving gaps in the reminder sequence.
-    const date = new Date(firstJordanDate.getTime());
-    date.setDate(date.getDate() + dayOffset);
-    for (const [name, prayerTime] of getPrayerSchedule(date, location)) {
-      const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
-      if (triggerDate <= now) continue;
-      const reminderKey = `${name}:${triggerDate.getTime()}`;
-      if (scheduledKeys.has(reminderKey)) continue;
-      scheduledKeys.add(reminderKey);
-      const id = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: "نداء محرابي",
-          body: `باقي ${minutesBefore} دقيقة على صلاة ${name} — استعد للصلاة.`,
-          sound: PRAYER_REMINDER_SOUND,
-          data: { prayerName: name, reminderKey, prayerReminder: true },
-        },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
-      });
-      ids.push(id);
+  try {
+    await clearPrayerReminderSchedule();
+    const now = new Date();
+    const scheduledKeys = new Set<string>();
+    const firstJordanDate = getJordanCalendarDate(now);
+    for (let dayOffset = 0; dayOffset < PRAYER_REMINDER_DAYS; dayOffset += 1) {
+      const date = new Date(firstJordanDate.getTime());
+      date.setDate(date.getDate() + dayOffset);
+      const prayerSchedule = getPrayerSchedule(date, location);
+      const scheduledPrayerNames = prayerSchedule.map(([name]) => name);
+      for (const [name, prayerTime] of prayerSchedule) {
+        const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
+        if (triggerDate <= now) continue;
+        const reminderKey = `${name}:${triggerDate.getTime()}`;
+        if (scheduledKeys.has(reminderKey)) continue;
+        scheduledKeys.add(reminderKey);
+        const id = await Notifications.scheduleNotificationAsync({
+          content: {
+            title: "نداء محرابي",
+            body: buildPrayerReminderBody(minutesBefore, name, scheduledPrayerNames),
+            sound: PRAYER_REMINDER_SOUND,
+            data: { prayerName: name, reminderKey, prayerReminder: true },
+          },
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
+        });
+        ids.push(id);
+      }
     }
+    await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
+  } catch (error) {
+    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+    await AsyncStorage.removeItem(REMINDER_IDS_KEY).catch(() => undefined);
+    throw error;
   }
-  await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
 };
 
 const getJordanCalendarDate = (value: Date) => {
@@ -370,6 +376,9 @@ export default function HomeScreen() {
       .then(() => {
         reminderScheduleKeyRef.current = scheduleKey;
       })
+      .catch((error) => {
+        console.warn("Prayer reminder scheduling failed; it will be retried.", error);
+      })
       .finally(() => {
         reminderSchedulingRef.current = false;
       });
@@ -381,9 +390,13 @@ export default function HomeScreen() {
       if (state === "active" && remindersEnabled && !reminderSchedulingRef.current) {
         reminderScheduleKeyRef.current = null;
         reminderSchedulingRef.current = true;
-        void schedulePrayerReminders(reminderMinutes, userLocation).finally(() => {
-          reminderSchedulingRef.current = false;
-        });
+        void schedulePrayerReminders(reminderMinutes, userLocation)
+          .catch((error) => {
+            console.warn("Prayer reminder foreground refresh failed; it will be retried.", error);
+          })
+          .finally(() => {
+            reminderSchedulingRef.current = false;
+          });
       }
     });
     return () => subscription.remove();
