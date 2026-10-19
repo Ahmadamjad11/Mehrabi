@@ -1,35 +1,45 @@
-
- // Load environment variables with proper priority (system > .env)
+// Load environment variables with proper priority (system > .env)
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
+// Bundle ID format: space.manus.<project_name_dots>.<timestamp>
+// e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
+// Bundle ID can only contain letters, numbers, and dots
+// Android requires each dot-separated segment to start with a letter
 const rawBundleId = "space.manus.wenausalli.t146334081328518";
-
 const bundleId =
   rawBundleId
-    .replace(/[-_]/g, ".")
-    .replace(/[^a-zA-Z0-9.]/g, "")
-    .replace(/\.+/g, ".")
-    .replace(/^\.+|\.+$/g, "")
+    .replace(/[-_]/g, ".") // Replace hyphens/underscores with dots
+    .replace(/[^a-zA-Z0-9.]/g, "") // Remove invalid chars
+    .replace(/\.+/g, ".") // Collapse consecutive dots
+    .replace(/^\.+|\.+$/g, "") // Trim leading/trailing dots
     .toLowerCase()
     .split(".")
-    .map((segment) =>
-      /^[a-zA-Z]/.test(segment) ? segment : "x" + segment
-    )
+    .map((segment) => {
+      // Android requires each segment to start with a letter
+      // Prefix with 'x' if segment starts with a digit
+      return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
+    })
     .join(".") || "space.manus.app";
-
+// Extract timestamp from bundle ID and prefix with "manus" for deep link scheme
+// e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
 const schemeFromBundleId = `manus${timestamp}`;
 
 const env = {
+  // App branding - update these values directly (do not use env vars)
   appName: "محرابي",
-  appSlug: "mihrabi",
+  appSlug: "maslay",
+  // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
+  // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
   androidPackage: bundleId,
 };
 
+// Expo serializes this browser-safe subset into native and web bundles. The server-only
+// MANUS_API_KEY and MANUS_JWT_SECRET must never enter this object.
 const publicRuntime = {
   oauthPortalUrl:
     process.env.MANUS_OAUTH_PORTAL_URL ??
@@ -46,36 +56,30 @@ const publicRuntime = {
     process.env.VITE_APP_ID ??
     process.env.EXPO_PUBLIC_APP_ID ??
     "",
-  apiBaseUrl:
-    process.env.EXPO_PUBLIC_API_BASE_URL ??
-    "https://wenausalli-budydcoo.manus.space",
+  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://wenausalli-budydcoo.manus.space",
 };
 
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.14",
-
   extra: {
     ...publicRuntime,
     eas: {
-      projectId: "65020099-6113-42e0-bddc-042a95647ade",
+      projectId: "848e3e97-c347-4df4-9eff-3d07555d3236",
     },
   },
-
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
-
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
-    infoPlist: {
-      ITSAppUsesNonExemptEncryption: false,
-    },
+    "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
   },
-
   android: {
     versionCode: 10014,
     adaptiveIcon: {
@@ -101,13 +105,11 @@ const config: ExpoConfig = {
       },
     ],
   },
-
   web: {
     bundler: "metro",
     output: "static",
     favicon: "./assets/images/favicon.png",
   },
-
   plugins: [
     "expo-asset",
     "expo-router",
@@ -120,15 +122,13 @@ const config: ExpoConfig = {
     [
       "expo-location",
       {
-        locationWhenInUsePermission:
-          "نستخدم موقعك لعرض أماكن الصلاة القريبة منك.",
+        locationWhenInUsePermission: "نستخدم موقعك لعرض أماكن الصلاة القريبة منك.",
       },
     ],
     [
       "expo-audio",
       {
-        microphonePermission:
-          "Allow $(PRODUCT_NAME) to access your microphone.",
+        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
       },
     ],
     [
@@ -160,7 +160,6 @@ const config: ExpoConfig = {
       },
     ],
   ],
-
   experiments: {
     typedRoutes: true,
     reactCompiler: true,

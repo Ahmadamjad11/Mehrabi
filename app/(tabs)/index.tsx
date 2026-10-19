@@ -75,9 +75,49 @@ const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: nu
 const JORDAN_TIME_ZONE = "Asia/Amman";
 const REMINDER_SETTINGS_KEY = "maslay.prayer-reminders.v1";
 const REMINDER_IDS_KEY = "maslay.prayer-reminder-ids.v1";
+const REMINDER_STATE_KEY = "maslay.prayer-reminder-state.v2";
 const PLACES_CACHE_KEY = "maslay.places-cache.v1";
 const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v3";
 const PRAYER_REMINDER_SOUND = "mehrabi_reminder.wav";
+
+type ReminderEntry = { key: string; prayerName: string; triggerAt: number };
+type ReminderGeneration = {
+  generationId: string;
+  status: "building" | "active" | "failed";
+  expectedEntries: ReminderEntry[];
+  notificationIds: string[];
+  createdAt: number;
+};
+type ReminderState = { activeGenerationId: string | null; generations: ReminderGeneration[] };
+
+let prayerReminderQueue: Promise<void> = Promise.resolve();
+
+const enqueuePrayerReminderWork = <T,>(work: () => Promise<T>) => {
+  const next = prayerReminderQueue.catch(() => undefined).then(work);
+  prayerReminderQueue = next.then(() => undefined, () => undefined);
+  return next;
+};
+
+const newReminderGenerationId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+const readReminderState = async (): Promise<ReminderState> => {
+  const stored = await AsyncStorage.getItem(REMINDER_STATE_KEY);
+  if (!stored) return { activeGenerationId: null, generations: [] };
+  try {
+    const parsed = JSON.parse(stored) as Partial<ReminderState>;
+    const generations = Array.isArray(parsed.generations) ? parsed.generations : [];
+    return {
+      activeGenerationId: typeof parsed.activeGenerationId === "string" ? parsed.activeGenerationId : null,
+      generations: generations.filter((generation): generation is ReminderGeneration =>
+        Boolean(generation && typeof generation.generationId === "string" && Array.isArray(generation.expectedEntries) && Array.isArray(generation.notificationIds)),
+      ),
+    };
+  } catch {
+    return { activeGenerationId: null, generations: [] };
+  }
+};
+
+const writeReminderState = (state: ReminderState) => AsyncStorage.setItem(REMINDER_STATE_KEY, JSON.stringify(state));
 
 if (Notifications.setNotificationHandler) {
   Notifications.setNotificationHandler({
@@ -104,57 +144,105 @@ const configurePrayerNotifications = async () => {
 };
 
 const clearPrayerReminderSchedule = async () => {
-  // Cancel only prayer-time reminders. Deferred ten-minute reminders must
-  // survive the foreground reschedule triggered when an action opens the app.
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  await Promise.all(scheduled
-    .filter((item) => item.trigger && (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
-    .map((item) => Notifications.cancelScheduledNotificationAsync(item.identifier)));
-  const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
-  if (!stored) return;
-  const ids = JSON.parse(stored) as string[];
-  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
-  await AsyncStorage.removeItem(REMINDER_IDS_KEY);
+  const ids = new Set<string>();
+  for (const item of scheduled) {
+    const data = item.content.data as { prayerReminder?: boolean } | undefined;
+    if (data?.prayerReminder === true) ids.add(item.identifier);
+  }
+  const state = await readReminderState();
+  state.generations.forEach((generation) => generation.notificationIds.forEach((id) => ids.add(id)));
+  const legacy = await AsyncStorage.getItem(REMINDER_IDS_KEY);
+  if (legacy) {
+    try {
+      (JSON.parse(legacy) as unknown[]).forEach((id) => { if (typeof id === "string") ids.add(id); });
+    } catch { /* Ignore malformed legacy state; scheduled metadata above is authoritative. */ }
+  }
+  await Promise.all([...ids].map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+  await AsyncStorage.multiRemove([REMINDER_IDS_KEY, REMINDER_STATE_KEY]);
 };
 
-const schedulePrayerReminders = async (minutesBefore: number, location: { lat: number; lng: number } | null) => {
-  if (Platform.OS === "web") return;
-  const ids: string[] = [];
-  try {
-    await clearPrayerReminderSchedule();
+const getScheduledTriggerAt = (item: Notifications.NotificationRequest) => {
+  const trigger = item.trigger as { date?: Date | number } | null;
+  if (!trigger || trigger.date === undefined) return null;
+  return typeof trigger.date === "number" ? trigger.date : trigger.date instanceof Date ? trigger.date.getTime() : null;
+};
+
+const schedulePrayerReminders = (minutesBefore: number, location: { lat: number; lng: number } | null) =>
+  enqueuePrayerReminderWork(async () => {
+    if (Platform.OS === "web") return;
+    const generationId = newReminderGenerationId();
     const now = new Date();
+    const expectedEntries: ReminderEntry[] = [];
     const scheduledKeys = new Set<string>();
     const firstJordanDate = getJordanCalendarDate(now);
     for (let dayOffset = 0; dayOffset < PRAYER_REMINDER_DAYS; dayOffset += 1) {
       const date = new Date(firstJordanDate.getTime());
       date.setDate(date.getDate() + dayOffset);
       const prayerSchedule = getPrayerSchedule(date, location);
-      const scheduledPrayerNames = prayerSchedule.map(([name]) => name);
       for (const [name, prayerTime] of prayerSchedule) {
-        const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
-        if (triggerDate <= now) continue;
-        const reminderKey = `${name}:${triggerDate.getTime()}`;
-        if (scheduledKeys.has(reminderKey)) continue;
-        scheduledKeys.add(reminderKey);
-        const id = await Notifications.scheduleNotificationAsync({
-          content: {
-            title: "نداء محرابي",
-            body: buildPrayerReminderBody(minutesBefore, name, scheduledPrayerNames),
-            sound: PRAYER_REMINDER_SOUND,
-            data: { prayerName: name, reminderKey, prayerReminder: true },
-          },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
-        });
-        ids.push(id);
+        const triggerAt = prayerTime.getTime() - minutesBefore * 60 * 1000;
+        if (triggerAt <= now.getTime()) continue;
+        const key = `${name}:${triggerAt}`;
+        if (scheduledKeys.has(key)) continue;
+        scheduledKeys.add(key);
+        expectedEntries.push({ key, prayerName: name, triggerAt });
       }
     }
-    await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
-  } catch (error) {
-    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-    await AsyncStorage.removeItem(REMINDER_IDS_KEY).catch(() => undefined);
-    throw error;
-  }
-};
+    const state = await readReminderState();
+    const building: ReminderGeneration = { generationId, status: "building", expectedEntries, notificationIds: [], createdAt: Date.now() };
+    await writeReminderState({ ...state, generations: [...state.generations, building] });
+    try {
+      for (const entry of expectedEntries) {
+        const prayerSchedule = getPrayerSchedule(new Date(entry.triggerAt + minutesBefore * 60 * 1000), location);
+        const prayerNames = prayerSchedule.map(([name]) => name);
+        const notificationId = await Notifications.scheduleNotificationAsync({
+          content: {
+            title: "نداء محرابي",
+            body: buildPrayerReminderBody(minutesBefore, entry.prayerName, prayerNames),
+            sound: PRAYER_REMINDER_SOUND,
+            data: { prayerName: entry.prayerName, reminderKey: entry.key, generationId, prayerReminder: true },
+          },
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(entry.triggerAt), channelId: PRAYER_REMINDER_CHANNEL },
+        });
+        building.notificationIds.push(notificationId);
+        await writeReminderState({ ...state, generations: [...state.generations.filter((item) => item.generationId !== generationId), building] });
+        console.info("[PrayerReminder] scheduled", { prayerName: entry.prayerName, prayerTimeISO: new Date(entry.triggerAt + minutesBefore * 60 * 1000).toISOString(), triggerTimeISO: new Date(entry.triggerAt).toISOString(), nowISO: now.toISOString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, minutesBefore, generationId });
+      }
+      const actual = await Notifications.getAllScheduledNotificationsAsync();
+      const actualForGeneration = actual.filter((item) => (item.content.data as { generationId?: string } | undefined)?.generationId === generationId);
+      const valid = expectedEntries.every((entry) => actualForGeneration.some((item) => {
+        const data = item.content.data as { reminderKey?: string; prayerName?: string } | undefined;
+        const actualTrigger = getScheduledTriggerAt(item);
+        return data?.reminderKey === entry.key && data.prayerName === entry.prayerName && actualTrigger !== null && Math.abs(actualTrigger - entry.triggerAt) <= 5000;
+      }));
+      if (!valid) throw new Error(`Reminder generation ${generationId} failed verification (${actualForGeneration.length}/${expectedEntries.length})`);
+      const activeState = await readReminderState();
+      const oldGenerations = activeState.generations.filter((item) => item.generationId !== generationId);
+      const orphanedPrayerIds = actual
+        .filter((item) => {
+          const data = item.content.data as { prayerReminder?: boolean; generationId?: string } | undefined;
+          return data?.prayerReminder === true && data.generationId !== generationId;
+        })
+        .map((item) => item.identifier);
+      const legacyIds: string[] = [];
+      const legacyStored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
+      if (legacyStored) {
+        try {
+          (JSON.parse(legacyStored) as unknown[]).forEach((id) => { if (typeof id === "string") legacyIds.push(id); });
+        } catch { /* Ignore malformed legacy state. */ }
+      }
+      await writeReminderState({ activeGenerationId: generationId, generations: [...activeState.generations.filter((item) => item.generationId !== generationId), { ...building, status: "active" }] });
+      await Promise.all([...oldGenerations.flatMap((generation) => generation.notificationIds), ...legacyIds, ...orphanedPrayerIds].map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+      await AsyncStorage.removeItem(REMINDER_IDS_KEY);
+      await writeReminderState({ activeGenerationId: generationId, generations: [{ ...building, status: "active" }] });
+    } catch (error) {
+      await Promise.all(building.notificationIds.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+      const latestState = await readReminderState();
+      await writeReminderState({ activeGenerationId: latestState.activeGenerationId === generationId ? null : latestState.activeGenerationId, generations: latestState.generations.filter((item) => item.generationId !== generationId) });
+      throw error;
+    }
+  });
 
 const getJordanCalendarDate = (value: Date) => {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -331,7 +419,7 @@ export default function HomeScreen() {
         return;
       }
     } else if (Platform.OS !== "web") {
-      await clearPrayerReminderSchedule();
+      await enqueuePrayerReminderWork(clearPrayerReminderSchedule);
       reminderScheduleKeyRef.current = null;
     }
     setReminderMinutes(minutes as 15 | 30 | 45);
