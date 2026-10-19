@@ -1,5 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { Magnetometer } from "expo-sensors";
@@ -340,6 +341,8 @@ export default function HomeScreen() {
   const [headingReady, setHeadingReady] = useState(false);
   const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
   const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [qiblaCameraMode, setQiblaCameraMode] = useState(true);
   const headingStreamRef = useRef(false);
   const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
@@ -598,6 +601,12 @@ export default function HomeScreen() {
   }, [language, locationEnabled]);
 
   useEffect(() => {
+    if (Platform.OS === "web" || activeTab !== "qibla") return;
+    if (cameraPermission?.granted || cameraPermission?.canAskAgain === false) return;
+    void requestCameraPermission().catch(() => undefined);
+  }, [activeTab, cameraPermission?.canAskAgain, cameraPermission?.granted, requestCameraPermission]);
+
+  useEffect(() => {
     let subscription: { remove: () => void } | null = null;
     let magnetometerSubscription: { remove: () => void } | null = null;
     if (activeTab !== "qibla") {
@@ -725,6 +734,7 @@ export default function HomeScreen() {
     setHeadingReady(false);
     setHeadingSource(null);
     setHeadingAccuracy(null);
+    setQiblaCameraMode(true);
     setActiveTab("qibla");
     if (!locationEnabled) await requestLocation();
   };
@@ -988,14 +998,22 @@ export default function HomeScreen() {
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
               <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{language === "ar" ? "تعمل تلقائيًا — بلا معايرة" : "Automatic — no calibration"}</Text></View>
               <Text style={styles.qiblaHeroHint}>{language === "ar" ? "أمسك هاتفك بأي اتجاه؛ السهم يصحح نفسه ويشير للكعبة" : "Hold your phone in any direction; the arrow corrects itself toward the Kaaba"}</Text>
-              <View style={styles.qiblaCompass}>
+              {qiblaCameraMode && cameraPermission?.granted && Platform.OS !== "web" ? <View style={styles.qiblaArFrame}>
+                <CameraView style={styles.qiblaCamera} facing="back" />
+                <View style={styles.qiblaArShade} />
+                <View style={styles.qiblaArReticle}><View style={styles.qiblaArCrosshair} /><View style={[styles.qiblaArKaaba, { transform: [{ rotate: `${qiblaRotation * 0.18}deg` }] }]}><MaterialCommunityIcons name="cube-outline" size={62} color={COLORS.gold} /><Text style={styles.qiblaArKaabaLabel}>{language === "ar" ? "الكعبة" : "Kaaba"}</Text></View><View style={[styles.qiblaArDirection, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={52} color={COLORS.gold} /></View></View>
+                <View style={styles.qiblaArTopBadge}><Ionicons name="scan-outline" size={15} color={COLORS.gold} /><Text style={styles.qiblaArTopText}>{language === "ar" ? "القبلة بالواقع المعزز" : "AR Qibla"}</Text></View>
+                <View style={styles.qiblaArBottomBadge}><Text style={styles.qiblaArBottomText}>{headingReady && Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "أنت باتجاه القبلة" : "You are facing Qibla") : Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "ثبّت الهاتف للحظة" : "Hold steady for a moment") : qiblaRotation > 0 ? (language === "ar" ? "التف يمينًا" : "Turn right") : (language === "ar" ? "التف يسارًا" : "Turn left")}</Text></View>
+              </View> : <View style={styles.qiblaCompass}>
                 <View style={styles.qiblaGlow} />
                 <View style={styles.qiblaRing}>
                   <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
                   <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><MaterialCommunityIcons name="cube-outline" size={20} color={COLORS.white} /></View></View>
                   <View style={styles.qiblaCenter} />
                 </View>
-              </View>
+              </View>}
+              {qiblaCameraMode && !cameraPermission?.granted && <View style={styles.qiblaCameraNotice}><Ionicons name={cameraPermission?.canAskAgain === false ? "lock-closed-outline" : "camera-outline"} size={19} color={COLORS.gold} /><Text style={styles.qiblaCameraNoticeText}>{cameraPermission?.canAskAgain === false ? (language === "ar" ? "الكاميرا غير مفعّلة. استخدم البوصلة التقليدية أو فعّلها من إعدادات الهاتف." : "Camera access is disabled. Use the compass or enable it in phone settings.") : (language === "ar" ? "نحتاج إذن الكاميرا لعرض القبلة بالواقع المعزز." : "Camera permission is needed for AR Qibla.")}</Text></View>}
+              <Pressable style={styles.qiblaModeButton} onPress={() => setQiblaCameraMode((current) => !current)}><Ionicons name={qiblaCameraMode ? "compass-outline" : "camera-outline"} size={17} color={COLORS.navy} /><Text style={styles.qiblaModeButtonText}>{qiblaCameraMode ? (language === "ar" ? "استخدام البوصلة التقليدية" : "Use traditional compass") : (language === "ar" ? "فتح القبلة بالواقع المعزز" : "Open AR Qibla")}</Text></Pressable>
               <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(kaabaDistance).toLocaleString(language === "ar" ? "ar-JO" : "en-US")}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "كم إلى الكعبة" : "km to Kaaba"}</Text></View></View>
               <View style={styles.qiblaAutoNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.teal} /><Text style={styles.qiblaAutoNoteText}>{userLocation ? (language === "ar" ? "لا تحتاج معرفة 161° أو تحريك الهاتف إلى زاوية معينة. نقرأ اتجاه الهاتف ونحسب الفرق تلقائيًا." : "You do not need to know 161° or point your phone to a fixed angle. We read your heading and calculate the difference automatically.") : (language === "ar" ? "فعّل الموقع ليبدأ الحساب التلقائي للقبلة." : "Enable location to start automatic Qibla calculation.")}</Text></View>
               <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? `البوصلة جاهزة · ${headingSource === "gps" ? "اتجاه حقيقي" : "حساس الهاتف"}${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · ${headingSource === "gps" ? "true heading" : "phone sensor"}`) : (language === "ar" ? "جارٍ تشغيل الموقع والحساس تلقائيًا" : "Starting location and sensors automatically")}</Text></View>
@@ -1308,6 +1326,22 @@ const styles = StyleSheet.create({
   qiblaSmartText: { color: COLORS.green, fontSize: 11, fontWeight: "900" },
   qiblaAutoNote: { flexDirection: "row-reverse", alignItems: "flex-start", gap: 7, backgroundColor: "#F0F7F7", borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: "#DCEBEA" },
   qiblaAutoNoteText: { flex: 1, color: COLORS.navy, fontSize: 11, lineHeight: 18, fontWeight: "700", textAlign: "right" },
+  qiblaArFrame: { height: 275, borderRadius: 20, overflow: "hidden", position: "relative", backgroundColor: "#102D4A", marginVertical: 8, borderWidth: 2, borderColor: COLORS.gold },
+  qiblaCamera: { ...StyleSheet.absoluteFill },
+  qiblaArShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(16,45,74,0.24)" },
+  qiblaArReticle: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center" },
+  qiblaArCrosshair: { width: 92, height: 92, borderWidth: 1, borderColor: "rgba(255,255,255,0.68)", borderRadius: 46 },
+  qiblaArKaaba: { position: "absolute", alignItems: "center", justifyContent: "center", padding: 9, borderRadius: 17, backgroundColor: "rgba(16,45,74,0.82)", borderWidth: 1, borderColor: COLORS.gold },
+  qiblaArKaabaLabel: { color: COLORS.white, fontSize: 11, fontWeight: "900", marginTop: 2 },
+  qiblaArDirection: { position: "absolute", bottom: 28, alignItems: "center", justifyContent: "center" },
+  qiblaArTopBadge: { position: "absolute", top: 12, right: 12, flexDirection: "row-reverse", alignItems: "center", gap: 6, backgroundColor: "rgba(16,45,74,0.84)", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
+  qiblaArTopText: { color: COLORS.white, fontSize: 11, fontWeight: "900" },
+  qiblaArBottomBadge: { position: "absolute", bottom: 12, left: 20, right: 20, alignItems: "center", backgroundColor: "rgba(16,45,74,0.84)", borderRadius: 999, paddingVertical: 8 },
+  qiblaArBottomText: { color: COLORS.gold, fontSize: 13, fontWeight: "900" },
+  qiblaCameraNotice: { flexDirection: "row-reverse", alignItems: "center", gap: 7, backgroundColor: COLORS.goldSoft, borderRadius: 13, padding: 11, marginVertical: 7 },
+  qiblaCameraNoticeText: { flex: 1, color: COLORS.navy, fontSize: 11, lineHeight: 17, fontWeight: "700", textAlign: "right" },
+  qiblaModeButton: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, backgroundColor: COLORS.canvas, borderWidth: 1, borderColor: COLORS.line, borderRadius: 13, paddingVertical: 10, marginBottom: 4 },
+  qiblaModeButtonText: { color: COLORS.navy, fontSize: 12, fontWeight: "900" },
   qiblaCompass: { alignItems: "center", justifyContent: "center", height: 220, marginVertical: 2, position: "relative" },
   qiblaGlow: { position: "absolute", width: 205, height: 205, borderRadius: 103, backgroundColor: "#EAF7F5" },
   qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
