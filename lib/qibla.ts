@@ -72,15 +72,21 @@ export const isHeadingReliable = ({
   headingUpdatedAt,
   headingSource,
   headingAccuracy,
+  usesTrueNorth,
   now = Date.now(),
 }: {
   headingReady: boolean;
   headingUpdatedAt: number | null;
   headingSource: "gps" | "sensor" | null;
   headingAccuracy: number | null;
+  usesTrueNorth: boolean;
   now?: number;
 }) => {
   if (!headingReady || !headingSource || !isHeadingFresh(headingUpdatedAt, now)) {
+    return false;
+  }
+
+  if (headingSource === "gps" && !usesTrueNorth) {
     return false;
   }
 

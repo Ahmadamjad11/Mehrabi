@@ -39,6 +39,7 @@ describe("qibla calculations", () => {
         headingUpdatedAt: 8_000,
         headingSource: "gps",
         headingAccuracy: 5,
+        usesTrueNorth: true,
         now: 10_000,
       }),
     ).toBe(false);
@@ -51,6 +52,7 @@ describe("qibla calculations", () => {
         headingUpdatedAt: 9_900,
         headingSource: "sensor",
         headingAccuracy: null,
+        usesTrueNorth: false,
         now: 10_000,
       }),
     ).toBe(false);
@@ -63,6 +65,7 @@ describe("qibla calculations", () => {
         headingUpdatedAt: 9_900,
         headingSource: "gps",
         headingAccuracy: 20,
+        usesTrueNorth: true,
         now: 10_000,
       }),
     ).toBe(true);
@@ -73,6 +76,7 @@ describe("qibla calculations", () => {
         headingUpdatedAt: 9_900,
         headingSource: "gps",
         headingAccuracy: 40,
+        usesTrueNorth: true,
         now: 10_000,
       }),
     ).toBe(false);
