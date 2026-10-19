@@ -1006,14 +1006,14 @@ export default function HomeScreen() {
               {qiblaCameraMode && cameraPermission?.granted && Platform.OS !== "web" && appIsActive ? <View style={styles.qiblaArFrame}>
                 <CameraView style={styles.qiblaCamera} facing="back" />
                 <View style={styles.qiblaArShade} />
-                <View style={styles.qiblaArReticle}><View style={styles.qiblaArCrosshair} /><View style={[styles.qiblaArKaaba, { transform: [{ translateX: qiblaMarkerOffset }] }]}><MaterialCommunityIcons name="cube-outline" size={62} color={COLORS.gold} /><Text style={styles.qiblaArKaabaLabel}>{language === "ar" ? "الكعبة" : "Kaaba"}</Text></View><View style={[styles.qiblaArDirection, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={52} color={COLORS.gold} /></View></View>
+                <View style={styles.qiblaArReticle}><View style={styles.qiblaArCrosshair} /><View style={[styles.qiblaArKaaba, { transform: [{ translateX: qiblaMarkerOffset }] }]}><View style={styles.kaabaIllustration}><View style={styles.kaabaIllustrationBand} /><View style={styles.kaabaIllustrationDoor} /></View><Text style={styles.qiblaArKaabaLabel}>{language === "ar" ? "الكعبة" : "Kaaba"}</Text></View><View style={[styles.qiblaArDirection, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={52} color={COLORS.gold} /></View></View>
                 <View style={styles.qiblaArTopBadge}><Ionicons name="scan-outline" size={15} color={COLORS.gold} /><Text style={styles.qiblaArTopText}>{language === "ar" ? "القبلة بالواقع المعزز" : "AR Qibla"}</Text></View>
                 <View style={styles.qiblaArBottomBadge}><Text style={styles.qiblaArBottomText}>{!userLocation ? (language === "ar" ? "جارٍ تحديد موقعك" : "Finding your location") : !qiblaHeadingReliable ? (language === "ar" ? "جارٍ تحديد الاتجاه — حرّك الهاتف ببطء" : "Finding direction — move the phone slowly") : Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "أنت باتجاه القبلة" : "You are facing Qibla") : qiblaRotation > 0 ? (language === "ar" ? "التف يمينًا" : "Turn right") : (language === "ar" ? "التف يسارًا" : "Turn left")}</Text></View>
               </View> : <View style={styles.qiblaCompass}>
                 <View style={styles.qiblaGlow} />
                 <View style={styles.qiblaRing}>
                   <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
-                  <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><MaterialCommunityIcons name="cube-outline" size={20} color={COLORS.white} /></View></View>
+                  <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><View style={styles.kaabaMini}><View style={styles.kaabaMiniBand} /><View style={styles.kaabaMiniDoor} /></View></View></View>
                   <View style={styles.qiblaCenter} />
                 </View>
               </View>}
@@ -1336,9 +1336,12 @@ const styles = StyleSheet.create({
   qiblaArShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(16,45,74,0.24)" },
   qiblaArReticle: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center" },
   qiblaArCrosshair: { width: 92, height: 92, borderWidth: 1, borderColor: "rgba(255,255,255,0.68)", borderRadius: 46 },
-  qiblaArKaaba: { position: "absolute", alignItems: "center", justifyContent: "center", padding: 9, borderRadius: 17, backgroundColor: "rgba(16,45,74,0.82)", borderWidth: 1, borderColor: COLORS.gold },
-  qiblaArKaabaLabel: { color: COLORS.white, fontSize: 11, fontWeight: "900", marginTop: 2 },
-  qiblaArDirection: { position: "absolute", bottom: 28, alignItems: "center", justifyContent: "center" },
+  qiblaArKaaba: { position: "absolute", left: "50%", top: "50%", width: 94, marginLeft: -47, marginTop: -47, alignItems: "center", justifyContent: "center", padding: 9, borderRadius: 17, backgroundColor: "rgba(16,45,74,0.88)", borderWidth: 1, borderColor: COLORS.gold },
+  qiblaArKaabaLabel: { color: COLORS.white, fontSize: 11, fontWeight: "900", marginTop: 5 },
+  kaabaIllustration: { width: 48, height: 48, borderRadius: 7, backgroundColor: "#171717", borderWidth: 2, borderColor: COLORS.gold, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  kaabaIllustrationBand: { position: "absolute", top: 13, left: 0, right: 0, height: 5, backgroundColor: COLORS.gold },
+  kaabaIllustrationDoor: { position: "absolute", bottom: 0, right: 10, width: 10, height: 17, backgroundColor: COLORS.gold, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
+  qiblaArDirection: { position: "absolute", left: "50%", bottom: 28, width: 52, marginLeft: -26, alignItems: "center", justifyContent: "center" },
   qiblaArTopBadge: { position: "absolute", top: 12, right: 12, flexDirection: "row-reverse", alignItems: "center", gap: 6, backgroundColor: "rgba(16,45,74,0.84)", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
   qiblaArTopText: { color: COLORS.white, fontSize: 11, fontWeight: "900" },
   qiblaArBottomBadge: { position: "absolute", bottom: 12, left: 20, right: 20, alignItems: "center", backgroundColor: "rgba(16,45,74,0.84)", borderRadius: 999, paddingVertical: 8 },
@@ -1357,6 +1360,9 @@ const styles = StyleSheet.create({
   qiblaWest: { position: "absolute", left: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
   qiblaNeedle: { alignItems: "center", justifyContent: "center", width: 86, height: 86 },
   kaabaBadge: { position: "absolute", top: 6, width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: COLORS.gold },
+  kaabaMini: { width: 17, height: 17, borderRadius: 3, backgroundColor: "#171717", borderWidth: 1, borderColor: COLORS.gold, overflow: "hidden" },
+  kaabaMiniBand: { position: "absolute", top: 4, left: 0, right: 0, height: 2, backgroundColor: COLORS.gold },
+  kaabaMiniDoor: { position: "absolute", bottom: 0, right: 3, width: 4, height: 6, backgroundColor: COLORS.gold },
   qiblaCenter: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: COLORS.navy, borderWidth: 3, borderColor: COLORS.white },
   qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
   qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
