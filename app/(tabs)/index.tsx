@@ -326,6 +326,7 @@ export default function HomeScreen() {
   const [headingReady, setHeadingReady] = useState(false);
   const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
   const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
+  const [usesTrueNorth, setUsesTrueNorth] = useState(false);
   const [headingUpdatedAt, setHeadingUpdatedAt] = useState<number | null>(null);
   const [appIsActive, setAppIsActive] = useState(true);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -627,6 +628,7 @@ export default function HomeScreen() {
       if (Number.isFinite(value)) {
         headingStreamRef.current = true;
         setHeadingSource("gps");
+        setUsesTrueNorth(heading.trueHeading >= 0);
         setHeadingAccuracy(Number.isFinite(heading.accuracy) ? heading.accuracy : null);
         smoothHeading(value);
       }
@@ -640,6 +642,7 @@ export default function HomeScreen() {
         // Expo's native axes point east/north; convert them to a clockwise heading.
         const heading = (Math.atan2(y, x) * 180) / Math.PI;
         setHeadingSource("sensor");
+        setUsesTrueNorth(false);
         setHeadingAccuracy(null);
         smoothHeading((360 - heading + 360) % 360);
       });
@@ -664,7 +667,7 @@ export default function HomeScreen() {
 
   const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
   const qiblaRotation = shortestSignedAngle(qiblaBearing, compassHeading);
-  const qiblaHeadingReliable = Boolean(userLocation) && isHeadingReliable({ headingReady, headingUpdatedAt, headingSource, headingAccuracy });
+  const qiblaHeadingReliable = Boolean(userLocation) && isHeadingReliable({ headingReady, headingUpdatedAt, headingSource, headingAccuracy, usesTrueNorth });
   const qiblaMarkerOffset = qiblaScreenOffset(qiblaRotation, Math.max(280, viewportWidth - 80));
   const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
 
@@ -734,6 +737,8 @@ export default function HomeScreen() {
     setHeadingReady(false);
     setHeadingSource(null);
     setHeadingAccuracy(null);
+    setUsesTrueNorth(false);
+    setHeadingUpdatedAt(null);
     setQiblaCameraMode(true);
     setActiveTab("qibla");
     if (!locationEnabled) await requestLocation();
