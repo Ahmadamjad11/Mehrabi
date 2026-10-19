@@ -19,6 +19,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -27,6 +28,7 @@ import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
 import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
+import { bearingToKaaba, distanceToKaabaKm, isHeadingReliable, qiblaScreenOffset, shortestSignedAngle } from "@/lib/qibla";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const COLORS = {
@@ -297,24 +299,6 @@ const formatCountdown = (target: Date, now: Date) => {
   return `${hours}:${minutes}:${rest}`;
 };
 
-const bearingToKaaba = (latitude: number, longitude: number) => {
-  const targetLat = (21.4225 * Math.PI) / 180;
-  const currentLat = (latitude * Math.PI) / 180;
-  const deltaLong = ((39.8262 - longitude) * Math.PI) / 180;
-  const bearing = (Math.atan2(Math.sin(deltaLong), Math.cos(currentLat) * Math.tan(targetLat) - Math.sin(currentLat) * Math.cos(deltaLong)) * 180) / Math.PI;
-  return (bearing + 360) % 360;
-};
-
-const distanceToKaabaKm = (latitude: number, longitude: number) => {
-  const earthRadiusKm = 6371;
-  const lat1 = (latitude * Math.PI) / 180;
-  const lat2 = (21.4225 * Math.PI) / 180;
-  const dLat = lat2 - lat1;
-  const dLng = ((39.8262 - longitude) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
 const createOsmHtml = (places: Place[], userLocation: { lat: number; lng: number } | null) => {
   const points = JSON.stringify(places.map((place) => [place.lat, place.lng, place.name, place.type]));
   const center = userLocation ? `[${userLocation.lat},${userLocation.lng}]` : "[31.9539,35.9106]";
@@ -326,6 +310,7 @@ const createPickerHtml = (location: { lat: number; lng: number }) => `<!doctype 
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { width: viewportWidth } = useWindowDimensions();
   const [query, setQuery] = useState("");
   const [placeOffset, setPlaceOffset] = useState(0);
   const [loadedApiPlaces, setLoadedApiPlaces] = useState<any[]>([]);
@@ -341,6 +326,8 @@ export default function HomeScreen() {
   const [headingReady, setHeadingReady] = useState(false);
   const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
   const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
+  const [headingUpdatedAt, setHeadingUpdatedAt] = useState<number | null>(null);
+  const [appIsActive, setAppIsActive] = useState(true);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [qiblaCameraMode, setQiblaCameraMode] = useState(true);
   const headingStreamRef = useRef(false);
@@ -551,6 +538,16 @@ export default function HomeScreen() {
   }, [activeFilter, nearestPlaces.data, placeOffset]);
 
   useEffect(() => {
+    if (Platform.OS === "web") return;
+
+    const subscription = AppState.addEventListener("change", (state) => {
+      setAppIsActive(state === "active");
+    });
+
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -601,15 +598,15 @@ export default function HomeScreen() {
   }, [language, locationEnabled]);
 
   useEffect(() => {
-    if (Platform.OS === "web" || activeTab !== "qibla") return;
+    if (Platform.OS === "web" || activeTab !== "qibla" || !appIsActive) return;
     if (cameraPermission?.granted || cameraPermission?.canAskAgain === false) return;
     void requestCameraPermission().catch(() => undefined);
-  }, [activeTab, cameraPermission?.canAskAgain, cameraPermission?.granted, requestCameraPermission]);
+  }, [activeTab, appIsActive, cameraPermission?.canAskAgain, cameraPermission?.granted, requestCameraPermission]);
 
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
     let magnetometerSubscription: { remove: () => void } | null = null;
-    if (activeTab !== "qibla") {
+    if (activeTab !== "qibla" || !appIsActive) {
       headingStreamRef.current = false;
       return () => undefined;
     }
@@ -621,6 +618,7 @@ export default function HomeScreen() {
         return (previous + delta * 0.28 + 360) % 360;
       });
       setHeadingReady(true);
+      setHeadingUpdatedAt(Date.now());
     };
     if (Platform.OS !== "web") void Magnetometer.requestPermissionsAsync().catch(() => undefined);
     Location.watchHeadingAsync((heading) => {
@@ -651,7 +649,7 @@ export default function HomeScreen() {
       magnetometerSubscription?.remove();
       headingStreamRef.current = false;
     };
-  }, [activeTab, locationEnabled]);
+  }, [activeTab, appIsActive, locationEnabled]);
 
   const prayerState = useMemo(() => {
     const today = getPrayerSchedule(now, userLocation);
@@ -665,7 +663,9 @@ export default function HomeScreen() {
   }, [now, userLocation]);
 
   const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
-  const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
+  const qiblaRotation = shortestSignedAngle(qiblaBearing, compassHeading);
+  const qiblaHeadingReliable = Boolean(userLocation) && isHeadingReliable({ headingReady, headingUpdatedAt, headingSource, headingAccuracy });
+  const qiblaMarkerOffset = qiblaScreenOffset(qiblaRotation, Math.max(280, viewportWidth - 80));
   const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
 
   const apiPlaces: Place[] = loadedApiPlaces.map((place) => ({
@@ -998,12 +998,12 @@ export default function HomeScreen() {
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
               <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{language === "ar" ? "تعمل تلقائيًا — بلا معايرة" : "Automatic — no calibration"}</Text></View>
               <Text style={styles.qiblaHeroHint}>{language === "ar" ? "أمسك هاتفك بأي اتجاه؛ السهم يصحح نفسه ويشير للكعبة" : "Hold your phone in any direction; the arrow corrects itself toward the Kaaba"}</Text>
-              {qiblaCameraMode && cameraPermission?.granted && Platform.OS !== "web" ? <View style={styles.qiblaArFrame}>
+              {qiblaCameraMode && cameraPermission?.granted && Platform.OS !== "web" && appIsActive ? <View style={styles.qiblaArFrame}>
                 <CameraView style={styles.qiblaCamera} facing="back" />
                 <View style={styles.qiblaArShade} />
-                <View style={styles.qiblaArReticle}><View style={styles.qiblaArCrosshair} /><View style={[styles.qiblaArKaaba, { transform: [{ rotate: `${qiblaRotation * 0.18}deg` }] }]}><MaterialCommunityIcons name="cube-outline" size={62} color={COLORS.gold} /><Text style={styles.qiblaArKaabaLabel}>{language === "ar" ? "الكعبة" : "Kaaba"}</Text></View><View style={[styles.qiblaArDirection, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={52} color={COLORS.gold} /></View></View>
+                <View style={styles.qiblaArReticle}><View style={styles.qiblaArCrosshair} /><View style={[styles.qiblaArKaaba, { transform: [{ translateX: qiblaMarkerOffset }] }]}><MaterialCommunityIcons name="cube-outline" size={62} color={COLORS.gold} /><Text style={styles.qiblaArKaabaLabel}>{language === "ar" ? "الكعبة" : "Kaaba"}</Text></View><View style={[styles.qiblaArDirection, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={52} color={COLORS.gold} /></View></View>
                 <View style={styles.qiblaArTopBadge}><Ionicons name="scan-outline" size={15} color={COLORS.gold} /><Text style={styles.qiblaArTopText}>{language === "ar" ? "القبلة بالواقع المعزز" : "AR Qibla"}</Text></View>
-                <View style={styles.qiblaArBottomBadge}><Text style={styles.qiblaArBottomText}>{headingReady && Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "أنت باتجاه القبلة" : "You are facing Qibla") : Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "ثبّت الهاتف للحظة" : "Hold steady for a moment") : qiblaRotation > 0 ? (language === "ar" ? "التف يمينًا" : "Turn right") : (language === "ar" ? "التف يسارًا" : "Turn left")}</Text></View>
+                <View style={styles.qiblaArBottomBadge}><Text style={styles.qiblaArBottomText}>{!userLocation ? (language === "ar" ? "جارٍ تحديد موقعك" : "Finding your location") : !qiblaHeadingReliable ? (language === "ar" ? "جارٍ تحديد الاتجاه — حرّك الهاتف ببطء" : "Finding direction — move the phone slowly") : Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "أنت باتجاه القبلة" : "You are facing Qibla") : qiblaRotation > 0 ? (language === "ar" ? "التف يمينًا" : "Turn right") : (language === "ar" ? "التف يسارًا" : "Turn left")}</Text></View>
               </View> : <View style={styles.qiblaCompass}>
                 <View style={styles.qiblaGlow} />
                 <View style={styles.qiblaRing}>
@@ -1016,7 +1016,7 @@ export default function HomeScreen() {
               <Pressable style={styles.qiblaModeButton} onPress={() => setQiblaCameraMode((current) => !current)}><Ionicons name={qiblaCameraMode ? "compass-outline" : "camera-outline"} size={17} color={COLORS.navy} /><Text style={styles.qiblaModeButtonText}>{qiblaCameraMode ? (language === "ar" ? "استخدام البوصلة التقليدية" : "Use traditional compass") : (language === "ar" ? "فتح القبلة بالواقع المعزز" : "Open AR Qibla")}</Text></Pressable>
               <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(kaabaDistance).toLocaleString(language === "ar" ? "ar-JO" : "en-US")}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "كم إلى الكعبة" : "km to Kaaba"}</Text></View></View>
               <View style={styles.qiblaAutoNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.teal} /><Text style={styles.qiblaAutoNoteText}>{userLocation ? (language === "ar" ? "لا تحتاج معرفة 161° أو تحريك الهاتف إلى زاوية معينة. نقرأ اتجاه الهاتف ونحسب الفرق تلقائيًا." : "You do not need to know 161° or point your phone to a fixed angle. We read your heading and calculate the difference automatically.") : (language === "ar" ? "فعّل الموقع ليبدأ الحساب التلقائي للقبلة." : "Enable location to start automatic Qibla calculation.")}</Text></View>
-              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? `البوصلة جاهزة · ${headingSource === "gps" ? "اتجاه حقيقي" : "حساس الهاتف"}${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · ${headingSource === "gps" ? "true heading" : "phone sensor"}`) : (language === "ar" ? "جارٍ تشغيل الموقع والحساس تلقائيًا" : "Starting location and sensors automatically")}</Text></View>
+              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, qiblaHeadingReliable ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{qiblaHeadingReliable ? (language === "ar" ? `البوصلة جاهزة · اتجاه حقيقي${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · true heading${headingAccuracy !== null ? ` · ${Math.round(headingAccuracy)}° accuracy` : ""}`) : (language === "ar" ? (userLocation ? "جارٍ تثبيت الاتجاه — حرّك الهاتف ببطء" : "جارٍ تحديد موقعك والاتجاه") : (userLocation ? "Stabilizing direction — move the phone slowly" : "Finding your location and direction"))}</Text></View>
               {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
