@@ -29,7 +29,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "محرابي",
-  appSlug: "maslay",
+  appSlug: "mihrabi",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
   logoUrl: "",
@@ -66,7 +66,7 @@ const config: ExpoConfig = {
   extra: {
     ...publicRuntime,
     eas: {
-      projectId: "848e3e97-c347-4df4-9eff-3d07555d3236",
+      projectId: "65020099-6113-42e0-bddc-042a95647ad",
     },
   },
   orientation: "portrait",
