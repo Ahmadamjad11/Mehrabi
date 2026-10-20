@@ -1,10 +1,26 @@
 import { ONE_YEAR_MS } from "../../shared/const.js";
+import { parse as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
-import { getUserByOpenId, revokeSessionToken, upsertUser } from "../db";
+import {
+  consumeOAuthStateNonce,
+  createOAuthStateNonce,
+  getUserByOpenId,
+  revokeSessionToken,
+  upsertUser,
+} from "../db";
 import {
   getSessionCookieName,
   getSessionCookieOptions,
 } from "./cookies";
+import { ENV } from "./env";
+import {
+  createOAuthState,
+  identifyOAuthPlatform,
+  OAUTH_STATE_COOKIE,
+  OAUTH_STATE_COOKIE_PATH,
+  OAUTH_STATE_TTL_MS,
+  verifyOAuthState,
+} from "./oauthState";
 import { sdk } from "./sdk";
 
 function presentedSessionToken(req: Request) {
@@ -21,6 +37,13 @@ function presentedSessionToken(req: Request) {
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function clearOAuthStateCookie(req: Request, res: Response) {
+  res.clearCookie(OAUTH_STATE_COOKIE, {
+    ...getSessionCookieOptions(req),
+    path: OAUTH_STATE_COOKIE_PATH,
+  });
 }
 
 function getFrontendOrigin(req: Request) {
@@ -88,21 +111,85 @@ function buildUserResponse(
 }
 
 export function registerOAuthRoutes(app: Express) {
-  app.get("/api/oauth/config", (_req: Request, res: Response) => {
-    res.json({
-      appId: process.env.MANUS_PROJECT_ID ?? process.env.VITE_APP_ID ?? "",
-      portalUrl: process.env.MANUS_OAUTH_PORTAL_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? process.env.OAUTH_SERVER_URL ?? "",
-    });
+  app.post("/api/oauth/start", async (req: Request, res: Response) => {
+    const redirectUri = typeof req.body?.redirectUri === "string" ? req.body.redirectUri : "";
+    if (!redirectUri || redirectUri.length > 1024) {
+      res.status(400).json({ error: "A valid OAuth callback URI is required" });
+      return;
+    }
+
+    let platform: "web" | "native";
+    try {
+      platform = identifyOAuthPlatform(req, redirectUri);
+    } catch {
+      res.status(400).json({ error: "OAuth callback URI is not approved" });
+      return;
+    }
+
+    const appId = ENV.appId;
+    const portalValue = process.env.MANUS_OAUTH_PORTAL_URL ?? process.env.VITE_OAUTH_PORTAL_URL ?? "";
+    if (!appId || !portalValue || !ENV.cookieSecret) {
+      res.status(503).json({ error: "Manus OAuth is not configured" });
+      return;
+    }
+
+    try {
+      const portal = new URL(portalValue);
+      if (portal.protocol !== "https:" && !(portal.protocol === "http:" && ["localhost", "127.0.0.1"].includes(portal.hostname))) {
+        throw new Error("OAuth portal must use HTTPS");
+      }
+
+      const { state, nonce, expiresAt } = createOAuthState(redirectUri, platform, ENV.cookieSecret);
+      await createOAuthStateNonce(nonce, platform, expiresAt);
+
+      if (platform === "web") {
+        res.cookie(OAUTH_STATE_COOKIE, nonce, {
+          ...getSessionCookieOptions(req),
+          path: OAUTH_STATE_COOKIE_PATH,
+          maxAge: OAUTH_STATE_TTL_MS,
+        });
+      }
+
+      const loginUrl = new URL(`${portalValue.replace(/\/$/, "")}/app-auth`);
+      loginUrl.searchParams.set("appId", appId);
+      loginUrl.searchParams.set("redirectUri", redirectUri);
+      loginUrl.searchParams.set("state", state);
+      loginUrl.searchParams.set("responseType", "code");
+      res.json({ loginUrl: loginUrl.toString(), state });
+    } catch {
+      console.error("[OAuth] Start failed");
+      res.status(503).json({ error: "Unable to start OAuth" });
+    }
   });
 
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");
 
-    if (!code || !state) {
+    if (!code || code.length > 4096 || !state) {
       res.status(400).json({ error: "code and state are required" });
       return;
     }
+
+    let verifiedState: ReturnType<typeof verifyOAuthState>;
+    try {
+      verifiedState = verifyOAuthState(state, "web", req, ENV.cookieSecret);
+    } catch {
+      res.status(400).json({ error: "Invalid or expired OAuth state" });
+      return;
+    }
+
+    const cookieNonce = parseCookieHeader(req.headers.cookie ?? "")[OAUTH_STATE_COOKIE];
+    if (!cookieNonce || cookieNonce !== verifiedState.nonce) {
+      res.status(400).json({ error: "OAuth state does not match the initiating browser" });
+      return;
+    }
+    if (!(await consumeOAuthStateNonce(verifiedState.nonce, "web"))) {
+      clearOAuthStateCookie(req, res);
+      res.status(400).json({ error: "OAuth state has already been used or expired" });
+      return;
+    }
+    clearOAuthStateCookie(req, res);
 
     try {
       const tokenResponse = await sdk.exchangeCodeForToken(code, state);
@@ -129,16 +216,22 @@ export function registerOAuthRoutes(app: Express) {
     }
   });
 
-  app.get("/api/oauth/mobile", async (req: Request, res: Response) => {
-    const code = getQueryParam(req, "code");
-    const state = getQueryParam(req, "state");
+  app.post("/api/oauth/mobile", async (req: Request, res: Response) => {
+    const code = typeof req.body?.code === "string" ? req.body.code : "";
+    const state = typeof req.body?.state === "string" ? req.body.state : "";
 
-    if (!code || !state) {
+    if (!code || code.length > 4096 || !state || state.length > 4096) {
       res.status(400).json({ error: "code and state are required" });
       return;
     }
 
     try {
+      const verifiedState = verifyOAuthState(state, "native", req, ENV.cookieSecret);
+      if (!(await consumeOAuthStateNonce(verifiedState.nonce, "native"))) {
+        res.status(400).json({ error: "OAuth state has already been used or expired" });
+        return;
+      }
+
       const tokenResponse = await sdk.exchangeCodeForToken(code, state);
       const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
       const user = await syncUser(userInfo);
@@ -146,12 +239,6 @@ export function registerOAuthRoutes(app: Express) {
       const sessionToken = await sdk.createSessionToken(userInfo.openId!, {
         name: userInfo.name || "",
         expiresInMs: ONE_YEAR_MS,
-      });
-
-      const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(getSessionCookieName(req), sessionToken, {
-        ...cookieOptions,
-        maxAge: ONE_YEAR_MS,
       });
 
       res.json({

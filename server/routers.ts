@@ -11,6 +11,7 @@ import {
   getFavoritePlaceIds,
   getPlaceById,
   listAllPlaces,
+  listOfficialMosques,
   listPlaces,
   listPublicPlaces,
   listReviews,
@@ -157,13 +158,41 @@ export const appRouter = router({
       }
       return createPlace({ ...input, status: "pending", createdBy: ctx.user.id });
     }),
-    favoriteIds: protectedProcedure.query(({ ctx }) => getFavoritePlaceIds(ctx.user.id)),
+    favoriteIds: protectedProcedure
+      .input(z.object({ userId: z.number().int().positive() }))
+      .query(({ ctx, input }) => {
+        if (input.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "لا يمكن قراءة مفضلات حساب آخر." });
+        }
+        return getFavoritePlaceIds(ctx.user.id);
+      }),
     setFavorite: protectedProcedure
       .input(z.object({ placeId: z.number().int().positive(), enabled: z.boolean() }))
-      .mutation(({ ctx, input }) => setFavorite(ctx.user.id, input.placeId, input.enabled)),
+      .mutation(async ({ ctx, input }) => {
+        if (input.enabled && !(await getPlaceById(input.placeId))) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "المكان غير موجود أو غير معتمد." });
+        }
+        return setFavorite(ctx.user.id, input.placeId, input.enabled);
+      }),
     review: protectedProcedure
       .input(z.object({ placeId: z.number().int().positive(), rating: z.number().int().min(1).max(5), comment: z.string().max(1000).optional() }))
-      .mutation(({ ctx, input }) => addReview({ ...input, userId: ctx.user.id })),
+      .mutation(async ({ ctx, input }) => {
+        if (!(await getPlaceById(input.placeId))) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "لا يمكن تقييم مكان غير موجود أو غير معتمد." });
+        }
+        return addReview({ ...input, userId: ctx.user.id });
+      }),
+  }),
+  officialMosques: router({
+    list: publicProcedure
+      .input(
+        z.object({
+          search: z.string().max(100).optional(),
+          limit: z.number().int().min(1).max(100).default(25),
+          offset: z.number().int().min(0).max(10000).default(0),
+        }).optional(),
+      )
+      .query(({ input }) => listOfficialMosques(input ?? { limit: 25, offset: 0 })),
   }),
   admin: router({
     pendingPlaces: adminProcedure.query(() => listPlaces("pending")),

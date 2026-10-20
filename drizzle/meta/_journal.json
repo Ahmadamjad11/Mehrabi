@@ -57,6 +57,34 @@
       "when": 1791861610062,
       "tag": "0007_moaning_purifiers",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1792481342002,
+      "tag": "0008_swift_owl",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1792483487053,
+      "tag": "0009_enforce_content_relations",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1792484750002,
+      "tag": "0010_add_auth_attempts_and_official_displayable",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1792486393234,
+      "tag": "0011_add_user_session_version",
+      "breakpoints": true
     }
   ]
 }

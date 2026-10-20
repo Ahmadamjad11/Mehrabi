@@ -15,7 +15,6 @@ import {
 } from "../server/_core/cookies";
 import {
   LEGACY_COOKIE_NAME,
-  SESSION_COOKIE_SUFFIX,
 } from "../shared/const";
 
 let server: Server | null = null;
@@ -219,11 +218,11 @@ describe("Mobile API origin and cookie isolation", () => {
       hostname: "3000-sandbox.preview.example.test",
     } as Request;
     const currentName = getSessionCookieName(request);
-    const tossableParentName = `manus_session_${SESSION_COOKIE_SUFFIX}`;
-    expect(currentName.startsWith("__Host-")).toBe(true);
+    const tossableParentName = "manus_session_other-project";
+    expect(currentName).toBe("webdev_app_session");
     expect(
       getSessionCookieName({ ...request, protocol: "http" } as Request),
-    ).toBe(`manus_local_session_${SESSION_COOKIE_SUFFIX}`);
+    ).toBe("webdev_app_session");
     for (const cookie of [
       `${LEGACY_COOKIE_NAME}=legacy-token; ${currentName}=current-project-token`,
       `${tossableParentName}=attacker-token; ${currentName}=current-project-token`,

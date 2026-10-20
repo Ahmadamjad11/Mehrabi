@@ -5,9 +5,6 @@ const LOOPBACK_IPS = new BlockList();
 LOOPBACK_IPS.addSubnet("127.0.0.0", 8, "ipv4");
 LOOPBACK_IPS.addAddress("::1", "ipv6");
 LOOPBACK_IPS.addSubnet("::ffff:127.0.0.0", 104, "ipv6");
-
-const PUBLIC_PRODUCTION_ORIGINS = new Set(["https://wenausalli-budydcoo.manus.space"]);
-
 function configuredOrigin(name: "EXPO_PACKAGER_PROXY_URL" | "EXPO_WEB_PREVIEW_URL"): string | null {
   const value = process.env[name];
   if (!value) return null;
@@ -95,7 +92,9 @@ export function createCorsMiddleware(
     }
     const forwardedProto = req.headers["x-forwarded-proto"];
     const requestProto = (Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto?.split(",")[0])?.trim() || req.protocol;
-    const requestOrigin = `${requestProto}://${req.get("host")}`;
+    const forwardedHost = req.headers["x-forwarded-host"];
+    const requestHost = (Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost?.split(",")[0])?.trim() || req.get("host");
+    const requestOrigin = `${requestProto}://${requestHost}`;
     // The published web app and API share one origin. Browsers still send an Origin
     // header for credentialed POST requests, so same-origin requests must be accepted
     // even when the platform does not inject EXPO_WEB_PREVIEW_URL in production.
@@ -104,7 +103,7 @@ export function createCorsMiddleware(
     const allowedLocalOrigin =
       localApiRequest(req.hostname) && configuredLocalExpoWebOrigins().has(origin);
     const allowedConfiguredOrigin =
-      !loopbackOrigin && (allowedOrigins.has(origin) || PUBLIC_PRODUCTION_ORIGINS.has(origin));
+      !loopbackOrigin && allowedOrigins.has(origin);
     if (!sameOrigin && !allowedConfiguredOrigin && !allowedLocalOrigin) {
       res.status(403).json({ error: "origin_not_allowed" });
       return;

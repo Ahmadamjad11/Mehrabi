@@ -22,6 +22,7 @@ export type SessionPayload = {
   openId: string;
   appId: string;
   name: string;
+  sessionVersion: number;
 };
 
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
@@ -39,8 +40,16 @@ class OAuthService {
   }
 
   private decodeState(state: string): string {
-    const redirectUri = atob(state);
-    return redirectUri;
+    let value: unknown;
+    try {
+      value = JSON.parse(Buffer.from(state, "base64").toString("utf8"));
+    } catch {
+      throw new Error("Invalid OAuth state");
+    }
+    if (!value || typeof value !== "object" || typeof (value as { redirectUri?: unknown }).redirectUri !== "string") {
+      throw new Error("OAuth state does not contain a redirect URI");
+    }
+    return (value as { redirectUri: string }).redirectUri;
   }
 
   async getTokenByCode(code: string, state: string): Promise<ExchangeTokenResponse> {
@@ -140,11 +149,13 @@ class SDKServer {
     openId: string,
     options: { expiresInMs?: number; name?: string } = {},
   ): Promise<string> {
+    const user = await db.getUserByOpenId(openId);
     return this.signSession(
       {
         openId,
         appId: ENV.appId,
         name: options.name || "",
+        sessionVersion: user?.sessionVersion ?? 0,
       },
       options,
     );
@@ -163,15 +174,17 @@ class SDKServer {
       openId: payload.openId,
       appId: payload.appId,
       name: payload.name,
+      sessionVersion: payload.sessionVersion,
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setExpirationTime(expirationSeconds)
+      .setIssuedAt(Math.floor(issuedAt / 1000))
       .sign(secretKey);
   }
 
   async verifySession(
     cookieValue: string | undefined | null,
-  ): Promise<{ openId: string; appId: string; name: string } | null> {
+  ): Promise<{ openId: string; appId: string; name: string; sessionVersion: number } | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
       return null;
@@ -182,10 +195,17 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, sessionVersion } = payload as Record<string, unknown>;
+      const version = typeof sessionVersion === "number" && Number.isSafeInteger(sessionVersion) && sessionVersion >= 0
+        ? sessionVersion
+        : null;
 
-      if (!isNonEmptyString(openId) || !isNonEmptyString(appId) || !isNonEmptyString(name)) {
+      if (!isNonEmptyString(openId) || appId !== ENV.appId || typeof name !== "string") {
         console.warn("[Auth] Session payload missing required fields");
+        return null;
+      }
+      if (version === null && !(openId.startsWith(CRON_OPEN_ID_PREFIX) && sessionVersion === undefined)) {
+        console.warn("[Auth] Session payload missing a valid session version");
         return null;
       }
 
@@ -193,6 +213,7 @@ class SDKServer {
         openId,
         appId,
         name,
+        sessionVersion: version ?? 0,
       };
     } catch {
       console.warn("[Auth] Session verification failed");
@@ -274,6 +295,10 @@ class SDKServer {
 
     if (!user) {
       throw ForbiddenError("User not found");
+    }
+
+    if (user.sessionVersion !== session.sessionVersion) {
+      throw ForbiddenError("Session has been invalidated");
     }
 
     await db.upsertUser({

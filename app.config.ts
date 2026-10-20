@@ -6,7 +6,7 @@ import type { ExpoConfig } from "expo/config";
 // e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
 // Bundle ID can only contain letters, numbers, and dots
 // Android requires each dot-separated segment to start with a letter
-const rawBundleId = "space.manus.wenausalli.t146334081328518";
+const rawBundleId = "space.manus.mehrabi.t161813727263579";
 const bundleId =
   rawBundleId
     .replace(/[-_]/g, ".") // Replace hyphens/underscores with dots
@@ -29,10 +29,9 @@ const schemeFromBundleId = `manus${timestamp}`;
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "محرابي",
-  appSlug: "mihrabi",
-  // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
-  // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "",
+  appSlug: "mehrabi",
+  // Public project branding asset; this stays separate from the native bundle icon.
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664033394560/pwXIEnadanxJxbnK.png",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
   androidPackage: bundleId,
@@ -56,21 +55,16 @@ const publicRuntime = {
     process.env.VITE_APP_ID ??
     process.env.EXPO_PUBLIC_APP_ID ??
     "",
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://wenausalli-budydcoo.manus.space",
+  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
 };
 
 const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.14",
-  extra: {
-    ...publicRuntime,
-    eas: {
-      projectId: "65020099-6113-42e0-bddc-042a95647ade",
-    },
-  },
+  version: "1.0.0",
+  extra: publicRuntime,
   orientation: "portrait",
-  icon: "./assets/images/icon.png",
+  icon: "./assets/images/mehrabi-icon-square.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
   ios: {
@@ -81,11 +75,9 @@ const config: ExpoConfig = {
       }
   },
   android: {
-    versionCode: 10014,
     adaptiveIcon: {
-      backgroundColor: "#102D4A",
-      foregroundImage: "./assets/images/android-icon-foreground.png",
-      backgroundImage: "./assets/images/android-icon-background.png",
+      backgroundColor: "#051222",
+      foregroundImage: "./assets/images/mehrabi-icon-square.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
     },
     predictiveBackGestureEnabled: false,
@@ -144,9 +136,9 @@ const config: ExpoConfig = {
         image: "./assets/images/splash-icon.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#F7F9FA",
+        backgroundColor: "#ffffff",
         dark: {
-          backgroundColor: "#102D4A",
+          backgroundColor: "#000000",
         },
       },
     ],
