@@ -1,9 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
-import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
-import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
 import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -19,7 +17,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -28,7 +25,6 @@ import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
 import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
-import { bearingToKaaba, distanceToKaabaKm, isHeadingReliable, qiblaScreenOffset, shortestSignedAngle } from "@/lib/qibla";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { filterApprovedPlaces } from "@/shared/place-visibility";
 
@@ -314,7 +310,6 @@ const createPickerHtml = (location: { lat: number; lng: number }) => `<!doctype 
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { width: viewportWidth } = useWindowDimensions();
   const [query, setQuery] = useState("");
   const [placeOffset, setPlaceOffset] = useState(0);
   const [loadedApiPlaces, setLoadedApiPlaces] = useState<any[]>([]);
@@ -325,17 +320,7 @@ export default function HomeScreen() {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [language, setLanguage] = useState<"ar" | "en">("ar");
   const [now, setNow] = useState(() => new Date());
-  const [compassHeading, setCompassHeading] = useState(0);
-  const [headingReady, setHeadingReady] = useState(false);
-  const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
-  const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
-  const [usesTrueNorth, setUsesTrueNorth] = useState(false);
-  const [headingUpdatedAt, setHeadingUpdatedAt] = useState<number | null>(null);
-  const [appIsActive, setAppIsActive] = useState(true);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [qiblaCameraMode, setQiblaCameraMode] = useState(true);
-  const headingStreamRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
+  const [activeTab, setActiveTab] = useState<"home" | "explore" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
@@ -558,16 +543,6 @@ export default function HomeScreen() {
   }, [activeFilter, nearestPlaces.data, placeOffset]);
 
   useEffect(() => {
-    if (Platform.OS === "web") return;
-
-    const subscription = AppState.addEventListener("change", (state) => {
-      setAppIsActive(state === "active");
-    });
-
-    return () => subscription.remove();
-  }, []);
-
-  useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -607,62 +582,6 @@ export default function HomeScreen() {
     };
   }, [language, locationEnabled]);
 
-  useEffect(() => {
-    if (Platform.OS === "web" || activeTab !== "qibla" || !appIsActive) return;
-    if (cameraPermission?.granted || cameraPermission?.canAskAgain === false) return;
-    void requestCameraPermission().catch(() => undefined);
-  }, [activeTab, appIsActive, cameraPermission?.canAskAgain, cameraPermission?.granted, requestCameraPermission]);
-
-  useEffect(() => {
-    let subscription: { remove: () => void } | null = null;
-    let magnetometerSubscription: { remove: () => void } | null = null;
-    if (activeTab !== "qibla" || !appIsActive) {
-      headingStreamRef.current = false;
-      return () => undefined;
-    }
-    headingStreamRef.current = false;
-    const smoothHeading = (next: number) => {
-      const normalized = (next + 360) % 360;
-      setCompassHeading((previous) => {
-        const delta = ((normalized - previous + 540) % 360) - 180;
-        return (previous + delta * 0.28 + 360) % 360;
-      });
-      setHeadingReady(true);
-      setHeadingUpdatedAt(Date.now());
-    };
-    if (Platform.OS !== "web") void Magnetometer.requestPermissionsAsync().catch(() => undefined);
-    Location.watchHeadingAsync((heading) => {
-      // trueHeading is corrected for magnetic declination when available.
-      const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
-      if (Number.isFinite(value)) {
-        headingStreamRef.current = true;
-        setHeadingSource("gps");
-        setUsesTrueNorth(heading.trueHeading >= 0);
-        setHeadingAccuracy(Number.isFinite(heading.accuracy) ? heading.accuracy : null);
-        smoothHeading(value);
-      }
-    }).then((next) => { subscription = next; }).catch(() => {
-      // Magnetometer fallback below handles devices without Location heading support.
-    });
-    if (Platform.OS !== "web" && typeof Magnetometer.addListener === "function") {
-      Magnetometer.setUpdateInterval(120);
-      magnetometerSubscription = Magnetometer.addListener(({ x, y }) => {
-        if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
-        // Expo's native axes point east/north; convert them to a clockwise heading.
-        const heading = (Math.atan2(y, x) * 180) / Math.PI;
-        setHeadingSource("sensor");
-        setUsesTrueNorth(false);
-        setHeadingAccuracy(null);
-        smoothHeading((360 - heading + 360) % 360);
-      });
-    }
-    return () => {
-      subscription?.remove();
-      magnetometerSubscription?.remove();
-      headingStreamRef.current = false;
-    };
-  }, [activeTab, appIsActive, locationEnabled]);
-
   const prayerState = useMemo(() => {
     const today = getPrayerSchedule(now, userLocation);
     let next = today.find(([, time]) => time.getTime() > now.getTime());
@@ -673,12 +592,6 @@ export default function HomeScreen() {
     }
     return { name: next[0], time: next[1] };
   }, [now, userLocation]);
-
-  const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
-  const qiblaRotation = shortestSignedAngle(qiblaBearing, compassHeading);
-  const qiblaHeadingReliable = Boolean(userLocation) && isHeadingReliable({ headingReady, headingUpdatedAt, headingSource, headingAccuracy, usesTrueNorth });
-  const qiblaMarkerOffset = qiblaScreenOffset(qiblaRotation, Math.max(280, viewportWidth - 80));
-  const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
 
   const apiPlaces: Place[] = filterApprovedPlaces(loadedApiPlaces).map((place) => ({
     id: String(place.id),
@@ -749,15 +662,9 @@ export default function HomeScreen() {
     }
   };
 
-  const openQibla = async () => {
-    setHeadingReady(false);
-    setHeadingSource(null);
-    setHeadingAccuracy(null);
-    setUsesTrueNorth(false);
-    setHeadingUpdatedAt(null);
-    setQiblaCameraMode(true);
-    setActiveTab("qibla");
-    if (!locationEnabled) await requestLocation();
+  const openQibla = () => {
+    setActiveTab("home");
+    router.push({ pathname: "/(tabs)/qibla" as never, params: { lang: language } });
   };
 
   const beginLogin = async () => {
@@ -1060,30 +967,6 @@ export default function HomeScreen() {
               <Text style={styles.exploreQuickTitle}>{language === "ar" ? "اختصارات ذكية" : "Smart shortcuts"}</Text>
               <View style={styles.exploreQuickGrid}>{filterOptions.filter((filter) => filter.key !== "nearest").map((filter) => <Pressable key={filter.key} style={styles.exploreQuickItem} onPress={() => { setPlaceTypeFilter("all"); setActiveFilter(filter.key); setActiveTab("home"); }}><Ionicons name={filter.key === "open" ? "time-outline" : filter.key === "ablution" ? "water-outline" : filter.key === "women" ? "people-outline" : "heart-outline"} size={17} color={COLORS.teal} /><Text style={styles.exploreQuickText}>{filter.label}</Text><Ionicons name="chevron-back" size={15} color={COLORS.muted} /></Pressable>)}</View>
             </>}
-            {activeTab === "qibla" && <>
-              {qiblaCameraMode && cameraPermission?.granted && Platform.OS !== "web" && appIsActive ? <View style={styles.qiblaArFrame}>
-                <CameraView style={styles.qiblaCamera} facing="back" />
-                <View style={styles.qiblaArShade} />
-                <View style={styles.qiblaArTopShade} />
-                <View style={styles.qiblaArBottomShade} />
-                <View style={styles.qiblaArReticle}><View style={styles.qiblaArCrosshair} /><View style={[styles.qiblaArKaaba, { transform: [{ translateX: qiblaMarkerOffset }] }]}><View style={styles.kaabaIllustration}><View style={styles.kaabaIllustrationBand} /><View style={styles.kaabaIllustrationDoor} /></View><Text style={styles.qiblaArKaabaLabel}>{language === "ar" ? "الكعبة" : "Kaaba"}</Text></View><View style={[styles.qiblaArDirection, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={52} color={COLORS.gold} /></View></View>
-                <View style={styles.qiblaArTopBadge}><Ionicons name="scan-outline" size={15} color={COLORS.gold} /><Text style={styles.qiblaArTopText}>{language === "ar" ? "القبلة بالواقع المعزز" : "AR Qibla"}</Text></View>
-                <View style={styles.qiblaArBottomBadge}><Text style={styles.qiblaArBottomText}>{!userLocation ? (language === "ar" ? "جارٍ تحديد موقعك" : "Finding your location") : !qiblaHeadingReliable ? (language === "ar" ? "جارٍ تحديد الاتجاه — حرّك الهاتف ببطء" : "Finding direction — move the phone slowly") : Math.abs(qiblaRotation) <= 8 ? (language === "ar" ? "أنت باتجاه القبلة" : "You are facing Qibla") : qiblaRotation > 0 ? (language === "ar" ? "التف يمينًا" : "Turn right") : (language === "ar" ? "التف يسارًا" : "Turn left")}</Text></View>
-              </View> : <View style={styles.qiblaCompass}>
-                <View style={styles.qiblaGlow} />
-                <View style={styles.qiblaRing}>
-                  <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
-                  <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><View style={styles.kaabaMini}><View style={styles.kaabaMiniBand} /><View style={styles.kaabaMiniDoor} /></View></View></View>
-                  <View style={styles.qiblaCenter} />
-                </View>
-              </View>}
-              {qiblaCameraMode && !cameraPermission?.granted && <View style={styles.qiblaCameraNotice}><Ionicons name={cameraPermission?.canAskAgain === false ? "lock-closed-outline" : "camera-outline"} size={19} color={COLORS.gold} /><Text style={styles.qiblaCameraNoticeText}>{cameraPermission?.canAskAgain === false ? (language === "ar" ? "الكاميرا غير مفعّلة. استخدم البوصلة التقليدية أو فعّلها من إعدادات الهاتف." : "Camera access is disabled. Use the compass or enable it in phone settings.") : (language === "ar" ? "نحتاج إذن الكاميرا لعرض القبلة بالواقع المعزز." : "Camera permission is needed for AR Qibla.")}</Text></View>}
-              <Pressable style={styles.qiblaModeButton} onPress={() => setQiblaCameraMode((current) => !current)}><Ionicons name={qiblaCameraMode ? "compass-outline" : "camera-outline"} size={17} color={COLORS.navy} /><Text style={styles.qiblaModeButtonText}>{qiblaCameraMode ? (language === "ar" ? "استخدام البوصلة التقليدية" : "Use traditional compass") : (language === "ar" ? "فتح القبلة بالواقع المعزز" : "Open AR Qibla")}</Text></Pressable>
-              <View style={[styles.qiblaStats, styles.qiblaStatsSingle]}><View><Text style={styles.qiblaStatValue}>{Math.round(kaabaDistance).toLocaleString(language === "ar" ? "ar-JO" : "en-US")} {language === "ar" ? "كم" : "km"}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "المسافة إلى الكعبة" : "Distance to Kaaba"}</Text></View></View>
-              <View style={styles.qiblaAutoNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.teal} /><Text style={styles.qiblaAutoNoteText}>{userLocation ? (language === "ar" ? "لا تحتاج إلى معرفة زاوية معينة؛ نقرأ اتجاه الهاتف ونحسب الفرق تلقائيًا." : "You do not need to know a fixed angle; we read your heading and calculate the difference automatically.") : (language === "ar" ? "فعّل الموقع ليبدأ الحساب التلقائي للقبلة." : "Enable location to start automatic Qibla calculation.")}</Text></View>
-              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, qiblaHeadingReliable ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{qiblaHeadingReliable ? (language === "ar" ? `البوصلة جاهزة · اتجاه حقيقي${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · true heading${headingAccuracy !== null ? ` · ${Math.round(headingAccuracy)}° accuracy` : ""}`) : (language === "ar" ? (userLocation ? "جارٍ تثبيت الاتجاه — حرّك الهاتف ببطء" : "جارٍ تحديد موقعك والاتجاه") : (userLocation ? "Stabilizing direction — move the phone slowly" : "Finding your location and direction"))}</Text></View>
-              {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
-            </>}
             {activeTab === "account" && <>
               <View style={styles.accountHero}><View style={styles.accountHeroIcon}><Ionicons name={meQuery.data ? "person" : "person-outline"} size={27} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{meQuery.data ? (language === "ar" ? `أهلًا ${meQuery.data.name || "بك"}` : `Welcome ${meQuery.data.name || ""}`) : ui.accountTitle}</Text><Text style={styles.modalHint}>{meQuery.data ? (language === "ar" ? "حسابك جاهز لإضافة الأماكن وكتابة التقييمات." : "Your account is ready for adding places and reviews.") : (language === "ar" ? "الحساب اختياري. تحتاجه فقط لإضافة مكان أو كتابة تقييم." : ui.accountHint)}</Text></View>
               {!meQuery.data && <View style={styles.accountAuthCard}><View style={styles.accountBenefit}><Ionicons name="shield-checkmark-outline" size={19} color={COLORS.green} /><Text style={styles.accountBenefitText}>{language === "ar" ? "بياناتك محفوظة بأمان" : "Your data stays secure"}</Text></View><Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{language === "ar" ? "تسجيل الدخول عبر Manus" : "Sign in with Manus"}</Text></Pressable><Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("login")}><Text style={styles.secondaryModalText}>{ui.emailLogin}</Text></Pressable><Pressable style={styles.authLink} onPress={() => openEmailAuth("register")}><Text style={styles.authLinkText}>{ui.emailRegister}</Text></Pressable></View>}
@@ -1383,55 +1266,6 @@ const styles = StyleSheet.create({
   exploreQuickGrid: { borderTopWidth: 1, borderTopColor: COLORS.line },
   exploreQuickItem: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   exploreQuickText: { color: COLORS.ink, fontSize: 12, fontWeight: "800", flex: 1, textAlign: "right" },
-  qiblaHeroHint: { color: COLORS.teal, fontSize: 13, fontWeight: "800", textAlign: "center", marginBottom: 3 },
-  qiblaSmartBadge: { alignSelf: "center", flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: "#E5F7F0", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 7 },
-  qiblaSmartText: { color: COLORS.green, fontSize: 11, fontWeight: "900" },
-  qiblaAutoNote: { flexDirection: "row-reverse", alignItems: "flex-start", gap: 7, backgroundColor: "#F0F7F7", borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: "#DCEBEA" },
-  qiblaAutoNoteText: { flex: 1, color: COLORS.navy, fontSize: 11, lineHeight: 18, fontWeight: "700", textAlign: "right" },
-  qiblaArFrame: { height: 320, borderRadius: 24, overflow: "hidden", position: "relative", backgroundColor: "#102D4A", marginVertical: 10, borderWidth: 1.5, borderColor: "rgba(243,180,75,0.82)" },
-  qiblaCamera: { ...StyleSheet.absoluteFill },
-  qiblaArShade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(16,45,74,0.18)" },
-  qiblaArTopShade: { position: "absolute", top: 0, left: 0, right: 0, height: 92, backgroundColor: "rgba(7,24,40,0.34)" },
-  qiblaArBottomShade: { position: "absolute", bottom: 0, left: 0, right: 0, height: 112, backgroundColor: "rgba(7,24,40,0.42)" },
-  qiblaArReticle: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center" },
-  qiblaArCrosshair: { width: 112, height: 112, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.78)", borderRadius: 56, shadowColor: COLORS.gold, shadowOpacity: 0.38, shadowRadius: 15, elevation: 4 },
-  qiblaArKaaba: { position: "absolute", left: "50%", top: "50%", width: 94, marginLeft: -47, marginTop: -47, alignItems: "center", justifyContent: "center", padding: 9, borderRadius: 17, backgroundColor: "rgba(16,45,74,0.86)", borderWidth: 1, borderColor: COLORS.gold, shadowColor: COLORS.gold, shadowOpacity: 0.35, shadowRadius: 14, elevation: 5 },
-  qiblaArKaabaLabel: { color: COLORS.white, fontSize: 11, fontWeight: "900", marginTop: 5 },
-  kaabaIllustration: { width: 48, height: 48, borderRadius: 7, backgroundColor: "#171717", borderWidth: 2, borderColor: COLORS.gold, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-  kaabaIllustrationBand: { position: "absolute", top: 13, left: 0, right: 0, height: 5, backgroundColor: COLORS.gold },
-  kaabaIllustrationDoor: { position: "absolute", bottom: 0, right: 10, width: 10, height: 17, backgroundColor: COLORS.gold, borderTopLeftRadius: 2, borderTopRightRadius: 2 },
-  qiblaArDirection: { position: "absolute", left: "50%", bottom: 28, width: 52, marginLeft: -26, alignItems: "center", justifyContent: "center" },
-  qiblaArTopBadge: { position: "absolute", top: 12, right: 12, flexDirection: "row-reverse", alignItems: "center", gap: 6, backgroundColor: "rgba(16,45,74,0.84)", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
-  qiblaArTopText: { color: COLORS.white, fontSize: 11, fontWeight: "900" },
-  qiblaArBottomBadge: { position: "absolute", bottom: 12, left: 20, right: 20, alignItems: "center", backgroundColor: "rgba(16,45,74,0.84)", borderRadius: 999, paddingVertical: 8 },
-  qiblaArBottomText: { color: COLORS.gold, fontSize: 13, fontWeight: "900" },
-  qiblaCameraNotice: { flexDirection: "row-reverse", alignItems: "center", gap: 7, backgroundColor: COLORS.goldSoft, borderRadius: 13, padding: 11, marginVertical: 7 },
-  qiblaCameraNoticeText: { flex: 1, color: COLORS.navy, fontSize: 11, lineHeight: 17, fontWeight: "700", textAlign: "right" },
-  qiblaModeButton: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, backgroundColor: COLORS.canvas, borderWidth: 1, borderColor: COLORS.line, borderRadius: 13, paddingVertical: 10, marginBottom: 4 },
-  qiblaModeButtonText: { color: COLORS.navy, fontSize: 12, fontWeight: "900" },
-  qiblaCompass: { alignItems: "center", justifyContent: "center", height: 220, marginVertical: 2, position: "relative" },
-  qiblaGlow: { position: "absolute", width: 205, height: 205, borderRadius: 103, backgroundColor: "#EAF7F5" },
-  qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
-  qiblaRing: { width: 188, height: 188, borderRadius: 94, borderWidth: 7, borderColor: "#C9E3E0", backgroundColor: "#F8FCFC", alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
-  qiblaNorth: { position: "absolute", top: 10, color: COLORS.navy, fontWeight: "900", fontSize: 12 },
-  qiblaEast: { position: "absolute", right: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaSouth: { position: "absolute", bottom: 10, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaWest: { position: "absolute", left: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaNeedle: { alignItems: "center", justifyContent: "center", width: 86, height: 86 },
-  kaabaBadge: { position: "absolute", top: 6, width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: COLORS.gold },
-  kaabaMini: { width: 17, height: 17, borderRadius: 3, backgroundColor: "#171717", borderWidth: 1, borderColor: COLORS.gold, overflow: "hidden" },
-  kaabaMiniBand: { position: "absolute", top: 4, left: 0, right: 0, height: 2, backgroundColor: COLORS.gold },
-  kaabaMiniDoor: { position: "absolute", bottom: 0, right: 3, width: 4, height: 6, backgroundColor: COLORS.gold },
-  qiblaCenter: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: COLORS.navy, borderWidth: 3, borderColor: COLORS.white },
-  qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
-  qiblaStatsSingle: { justifyContent: "center" },
-  qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
-  qiblaStatLabel: { color: COLORS.muted, fontSize: 10, textAlign: "center", marginTop: 2 },
-  compassStatus: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, marginBottom: 4 },
-  compassStatusDot: { width: 8, height: 8, borderRadius: 4 },
-  compassStatusReady: { backgroundColor: COLORS.green },
-  compassStatusWaiting: { backgroundColor: COLORS.gold },
-  compassStatusText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   primaryModalButton: { height: 50, borderRadius: 14, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
   primaryModalText: { color: COLORS.white, fontSize: 15, fontWeight: "800", writingDirection: "rtl" },
   calibrationHint: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "center", marginBottom: 3 },

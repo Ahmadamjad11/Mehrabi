@@ -3,59 +3,58 @@ export const KAABA_COORDINATES = {
   longitude: 39.8262,
 } as const;
 
+export const isValidCoordinates = (latitude: number, longitude: number) =>
+  Number.isFinite(latitude) &&
+  Number.isFinite(longitude) &&
+  latitude >= -90 &&
+  latitude <= 90 &&
+  longitude >= -180 &&
+  longitude <= 180;
+
 export const normalizeDegrees = (degrees: number) =>
-  ((degrees % 360) + 360) % 360;
+  Number.isFinite(degrees) ? ((degrees % 360) + 360) % 360 : Number.NaN;
 
-export const shortestSignedAngle = (target: number, current: number) =>
-  ((normalizeDegrees(target - current) + 540) % 360) - 180;
+export const shortestSignedAngle = (target: number, current: number) => {
+  if (!Number.isFinite(target) || !Number.isFinite(current)) return Number.NaN;
+  return ((normalizeDegrees(target - current) + 540) % 360) - 180;
+};
 
-export const bearingToKaaba = (latitude: number, longitude: number) => {
+/** Initial true bearing from a validated point on Earth to the Kaaba. */
+export const bearingToKaaba = (
+  latitude: number,
+  longitude: number,
+): number | null => {
+  if (!isValidCoordinates(latitude, longitude)) return null;
+
   const targetLat = (KAABA_COORDINATES.latitude * Math.PI) / 180;
   const currentLat = (latitude * Math.PI) / 180;
   const deltaLong = ((KAABA_COORDINATES.longitude - longitude) * Math.PI) / 180;
-  const bearing =
-    (Math.atan2(
-      Math.sin(deltaLong),
-      Math.cos(currentLat) * Math.tan(targetLat) -
-        Math.sin(currentLat) * Math.cos(deltaLong),
-    ) *
-      180) /
-    Math.PI;
+  const y = Math.sin(deltaLong) * Math.cos(targetLat);
+  const x =
+    Math.cos(currentLat) * Math.sin(targetLat) -
+    Math.sin(currentLat) * Math.cos(targetLat) * Math.cos(deltaLong);
 
-  return normalizeDegrees(bearing);
+  return normalizeDegrees((Math.atan2(y, x) * 180) / Math.PI);
 };
 
-export const distanceToKaabaKm = (latitude: number, longitude: number) => {
-  const earthRadiusKm = 6371;
+/** Great-circle distance in kilometers, or null when coordinates are invalid. */
+export const distanceToKaabaKm = (
+  latitude: number,
+  longitude: number,
+): number | null => {
+  if (!isValidCoordinates(latitude, longitude)) return null;
+
+  const earthRadiusKm = 6371.0088;
   const lat1 = (latitude * Math.PI) / 180;
   const lat2 = (KAABA_COORDINATES.latitude * Math.PI) / 180;
   const dLat = lat2 - lat1;
   const dLng = ((KAABA_COORDINATES.longitude - longitude) * Math.PI) / 180;
-  const a =
+  const haversine =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  const clamped = Math.max(0, Math.min(1, haversine));
 
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-/** Maps the signed heading difference into a bounded horizontal AR offset.
- * The visible horizontal field is intentionally explicit (90 degrees), rather
- * than using an unexplained visual multiplier. Values outside the field clamp
- * to the edge and the arrow continues to communicate turn direction.
- */
-export const qiblaScreenOffset = (
-  signedDifference: number,
-  viewportWidth: number,
-  horizontalFieldOfView = 90,
-) => {
-  const halfWidth = viewportWidth / 2;
-  const halfFov = horizontalFieldOfView / 2;
-  const normalizedDifference = Math.max(
-    -halfFov,
-    Math.min(halfFov, signedDifference),
-  );
-
-  return (normalizedDifference / halfFov) * halfWidth;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(clamped), Math.sqrt(1 - clamped));
 };
 
 export const isHeadingFresh = (
@@ -65,6 +64,8 @@ export const isHeadingFresh = (
 ) =>
   headingUpdatedAt !== null &&
   Number.isFinite(headingUpdatedAt) &&
+  Number.isFinite(now) &&
+  now - headingUpdatedAt >= 0 &&
   now - headingUpdatedAt <= maxAgeMs;
 
 export const isHeadingReliable = ({
@@ -86,15 +87,7 @@ export const isHeadingReliable = ({
     return false;
   }
 
-  if (headingSource === "gps" && !usesTrueNorth) {
-    return false;
-  }
+  if (headingSource !== "gps" || !usesTrueNorth || headingAccuracy === null) return false;
 
-  if (headingSource === "gps" && headingAccuracy !== null) {
-    return Number.isFinite(headingAccuracy) && headingAccuracy <= 25;
-  }
-
-  // Magnetometer fallback has no accuracy value in Expo's event payload.
-  // It may guide the user, but it is never treated as a precise confirmation.
-  return headingSource === "gps";
+  return Number.isFinite(headingAccuracy) && headingAccuracy >= 0 && headingAccuracy <= 25;
 };

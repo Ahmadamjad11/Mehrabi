@@ -114,7 +114,7 @@ const config: ExpoConfig = {
     [
       "expo-location",
       {
-        locationWhenInUsePermission: "نستخدم موقعك لعرض أماكن الصلاة القريبة منك.",
+        locationWhenInUsePermission: "نستخدم موقعك لحساب اتجاه القبلة وعرض أماكن الصلاة القريبة منك.",
       },
     ],
     [
