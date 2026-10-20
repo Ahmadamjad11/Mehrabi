@@ -30,9 +30,8 @@ const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "محرابي",
   appSlug: "mehrabi",
-  // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
-  // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "",
+  // Public project branding asset; this stays separate from the native bundle icon.
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664033394560/pwXIEnadanxJxbnK.png",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
   androidPackage: bundleId,
@@ -65,7 +64,7 @@ const config: ExpoConfig = {
   version: "1.0.0",
   extra: publicRuntime,
   orientation: "portrait",
-  icon: "./assets/images/icon.png",
+  icon: "./assets/images/mehrabi-icon-square.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
   ios: {
@@ -77,9 +76,8 @@ const config: ExpoConfig = {
   },
   android: {
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
-      foregroundImage: "./assets/images/android-icon-foreground.png",
-      backgroundImage: "./assets/images/android-icon-background.png",
+      backgroundColor: "#051222",
+      foregroundImage: "./assets/images/mehrabi-icon-square.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
     },
     predictiveBackGestureEnabled: false,
@@ -107,6 +105,18 @@ const config: ExpoConfig = {
   plugins: [
     "expo-asset",
     "expo-router",
+    [
+      "expo-notifications",
+      {
+        sounds: ["./assets/mehrabi_reminder.wav"],
+      },
+    ],
+    [
+      "expo-location",
+      {
+        locationWhenInUsePermission: "نستخدم موقعك لعرض أماكن الصلاة القريبة منك.",
+      },
+    ],
     [
       "expo-audio",
       {

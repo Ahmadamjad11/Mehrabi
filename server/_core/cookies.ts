@@ -2,7 +2,6 @@ import { parse as parseCookieHeader } from "cookie";
 import type { CookieOptions, Request, RequestHandler } from "express";
 import {
   LEGACY_COOKIE_NAME,
-  SESSION_COOKIE_SUFFIX,
 } from "../../shared/const.js";
 
 function isSecureRequest(req: Request) {
@@ -47,10 +46,8 @@ function legacyParentDomain(hostname: string): string | null {
   return `.${normalized.split(".").slice(-2).join(".")}`;
 }
 
-export function getSessionCookieName(req: Request): string {
-  return isSecureRequest(req)
-    ? `__Host-manus_session_${SESSION_COOKIE_SUFFIX}`
-    : `manus_local_session_${SESSION_COOKIE_SUFFIX}`;
+export function getSessionCookieName(_req: Request): string {
+  return "webdev_app_session";
 }
 
 export function getLegacySessionCookieOptions(

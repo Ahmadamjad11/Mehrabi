@@ -27,7 +27,10 @@ export function createTRPCClient() {
         transformer: superjson,
         async headers() {
           const token = await Auth.getSessionToken();
-          return token ? { Authorization: `Bearer ${token}` } : {};
+          return {
+            "x-trpc-source": "expo-react",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          };
         },
         // Custom fetch to include credentials for cookie-based auth
         fetch(url, options) {
