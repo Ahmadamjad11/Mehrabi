@@ -29,7 +29,7 @@ const schemeFromBundleId = `manus${timestamp}`;
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "محرابي",
-  appSlug: "mehrabi",
+  appSlug: "mihrabi",
   // Public project branding asset; this stays separate from the native bundle icon.
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664033394560/pwXIEnadanxJxbnK.png",
   scheme: schemeFromBundleId,
@@ -62,7 +62,13 @@ const config: ExpoConfig = {
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.0",
-  extra: publicRuntime,
+  owner: "ahmad11to",
+  extra: {
+    ...publicRuntime,
+    eas: {
+      projectId: "65020099-6113-42e0-bddc-042a95647ade",
+    },
+  },
   orientation: "portrait",
   icon: "./assets/images/mehrabi-icon-square.png",
   scheme: env.scheme,
