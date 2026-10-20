@@ -1,0 +1,1 @@
+export const APP_NATIVE_OAUTH_SCHEME = "manus161813727263579";
