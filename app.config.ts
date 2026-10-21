@@ -55,10 +55,13 @@ const publicRuntime = {
     process.env.VITE_APP_ID ??
     process.env.EXPO_PUBLIC_APP_ID ??
     "",
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
+  apiBaseUrl:
+    process.env.EXPO_PUBLIC_API_BASE_URL ||
+    "https://mehrabi-dvz6x8x.manus.space",
 };
 
-const config: ExpoConfig = {
+const config: ExpoConfig & { logoUrl: string } = {
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664032199208/lHznBaREXRXrJYDO.png",
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.0",
