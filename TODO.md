@@ -2,7 +2,7 @@
 
 ## استعادة ملفات التطبيق إلى commit محدد
 - [x] استعادة ملفات العميل `app/` و`assets/` و`components/` و`constants/` و`hooks/` و`lib/` و`scripts/load-env.js` من GitHub commit `97e22df9c65ceb13f506b61616141abc147793bf`؛ تطابقت الملفات مع اللقطة. لا تُكتب تعديلات ميزات جديدة داخل التطبيق. يُحفظ `logoUrl` الحرفي الحالي لبيانات شعار Manus فقط.
-- [ ] حفظ التغيير بcommits عادية على Manus `main` وGitHub `main` دون force-push أو إعادة كتابة للتاريخ أو استبدال ملفات الخادم والقاعدة. استعادة SHA إلى Manus انتقائية لأن تاريخ Manus منفصل.
+- [x] حفظ التغيير بcommits عادية على Manus `main` وGitHub `main` دون force-push أو إعادة كتابة للتاريخ أو استبدال ملفات الخادم والقاعدة. استعادة SHA إلى Manus انتقائية لأن تاريخ Manus منفصل؛ commit التطبيق على Manus `9f3963c` وعلى GitHub `19769f7`.
 - [x] إعداد `eas.json` من اللقطة مع ضبط `build.preview.env.EXPO_PUBLIC_API_BASE_URL=https://mehrabi-dvz6x8x.manus.space` فقط. هذا إعداد build مصرح به، ولا يغيّر JavaScript أو `app.config.ts`.
 - [x] عدم تغيير أو إعادة نشر Backend Manus الحالي: يظل API على `https://mehrabi-dvz6x8x.manus.space` من checkpoint `29188a7`، ونقطة `/api/health` أعادت HTTP 200.
 - [x] الحفاظ على قاعدة البيانات الجديدة وبياناتها كما هي، دون تشغيل ترحيلات أو إعادة استيراد أو حذف. دليل الوزارة يبقى فيه 7,363 سجلًا خامًا (7,362 قابلًا للعرض)، وتبقى الأماكن المعتمدة الـ20؛ لا تُدّعى استعادة حسابات أو بيانات المستخدمين القديمة.
