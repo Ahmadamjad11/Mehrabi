@@ -1,6 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
-import { SESSION_TOKEN_KEY, USER_INFO_KEY } from "@/constants/oauth";
+import { PENDING_OAUTH_STATE_KEY, SESSION_TOKEN_KEY, USER_INFO_KEY } from "@/constants/oauth";
 
 export type User = {
   id: number;
@@ -8,6 +8,7 @@ export type User = {
   name: string | null;
   email: string | null;
   loginMethod: string | null;
+  role?: "user" | "admin";
   lastSignedIn: Date;
 };
 
@@ -121,5 +122,17 @@ export async function clearUserInfo(): Promise<void> {
     await SecureStore.deleteItemAsync(USER_INFO_KEY);
   } catch {
     console.error("[Auth] Failed to clear user info");
+  }
+}
+
+export async function consumePendingOAuthState(state: string): Promise<boolean> {
+  if (Platform.OS === "web" || !state || state.length > 4096) return false;
+  try {
+    const expected = await SecureStore.getItemAsync(PENDING_OAUTH_STATE_KEY);
+    if (!expected || expected !== state) return false;
+    await SecureStore.deleteItemAsync(PENDING_OAUTH_STATE_KEY);
+    return true;
+  } catch {
+    return false;
   }
 }

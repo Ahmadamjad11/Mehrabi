@@ -15,7 +15,6 @@ import {
 } from "../server/_core/cookies";
 import {
   LEGACY_COOKIE_NAME,
-  SESSION_COOKIE_SUFFIX,
 } from "../shared/const";
 
 let server: Server | null = null;
@@ -181,6 +180,17 @@ describe("Mobile API origin and cookie isolation", () => {
     expect(native.headers.get("access-control-allow-origin")).toBeNull();
   });
 
+  it("allows credentialed requests from the exact API origin", async () => {
+    const base = await testServer(false, new Set());
+    const sameOrigin = await fetch(`${base}/write`, {
+      method: "POST",
+      headers: { Origin: base },
+    });
+    expect(sameOrigin.status).toBe(200);
+    expect(sameOrigin.headers.get("access-control-allow-origin")).toBe(base);
+    expect(sameOrigin.headers.get("access-control-allow-credentials")).toBe("true");
+  });
+
   it("keeps session cookies host-only across different sandbox API hosts", () => {
     for (const hostname of [
       "3000-sandbox-a.preview.example.test",
@@ -208,11 +218,11 @@ describe("Mobile API origin and cookie isolation", () => {
       hostname: "3000-sandbox.preview.example.test",
     } as Request;
     const currentName = getSessionCookieName(request);
-    const tossableParentName = `manus_session_${SESSION_COOKIE_SUFFIX}`;
-    expect(currentName.startsWith("__Host-")).toBe(true);
+    const tossableParentName = "manus_session_other-project";
+    expect(currentName).toBe("webdev_app_session");
     expect(
       getSessionCookieName({ ...request, protocol: "http" } as Request),
-    ).toBe(`manus_local_session_${SESSION_COOKIE_SUFFIX}`);
+    ).toBe("webdev_app_session");
     for (const cookie of [
       `${LEGACY_COOKIE_NAME}=legacy-token; ${currentName}=current-project-token`,
       `${tossableParentName}=attacker-token; ${currentName}=current-project-token`,

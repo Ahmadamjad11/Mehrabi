@@ -19,6 +19,7 @@ export default function TabLayout() {
         headerShown: false,
         tabBarButton: HapticTab,
         tabBarStyle: {
+          display: "none",
           paddingTop: 8,
           paddingBottom: bottomPadding,
           height: tabBarHeight,
@@ -31,10 +32,12 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: "الرئيسية",
+          tabBarIcon: ({ color }) => <IconSymbol size={24} name="house.fill" color={color} />,
         }}
       />
+      <Tabs.Screen name="official" options={{ href: null }} />
+      <Tabs.Screen name="qibla" options={{ href: null }} />
     </Tabs>
   );
 }

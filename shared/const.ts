@@ -1,5 +1,5 @@
-export const SESSION_COOKIE_SUFFIX = "252704997946491";
-export const LEGACY_COOKIE_NAME = "app_session_id";
+// Used only to expire the previous app cookie; it is never accepted as an authenticated session.
+export const LEGACY_COOKIE_NAME = "manus_session_146334081328518";
 export const ONE_YEAR_MS = 1000 * 60 * 60 * 24 * 365;
 export const AXIOS_TIMEOUT_MS = 30_000;
 export const UNAUTHED_ERR_MSG = "Please login (10001)";
