@@ -1,44 +1,35 @@
-// Load environment variables with proper priority (system > .env)
+
+ // Load environment variables with proper priority (system > .env)
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
 
-// Bundle ID format: space.manus.<project_name_dots>.<timestamp>
-// e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
-// Bundle ID can only contain letters, numbers, and dots
-// Android requires each dot-separated segment to start with a letter
-const rawBundleId = "space.manus.mehrabi.t161813727263579";
+const rawBundleId = "space.manus.wenausalli.t146334081328518";
+
 const bundleId =
   rawBundleId
-    .replace(/[-_]/g, ".") // Replace hyphens/underscores with dots
-    .replace(/[^a-zA-Z0-9.]/g, "") // Remove invalid chars
-    .replace(/\.+/g, ".") // Collapse consecutive dots
-    .replace(/^\.+|\.+$/g, "") // Trim leading/trailing dots
+    .replace(/[-_]/g, ".")
+    .replace(/[^a-zA-Z0-9.]/g, "")
+    .replace(/\.+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
     .toLowerCase()
     .split(".")
-    .map((segment) => {
-      // Android requires each segment to start with a letter
-      // Prefix with 'x' if segment starts with a digit
-      return /^[a-zA-Z]/.test(segment) ? segment : "x" + segment;
-    })
+    .map((segment) =>
+      /^[a-zA-Z]/.test(segment) ? segment : "x" + segment
+    )
     .join(".") || "space.manus.app";
-// Extract timestamp from bundle ID and prefix with "manus" for deep link scheme
-// e.g., "space.manus.my.app.t20240115103045" -> "manus20240115103045"
+
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
 const schemeFromBundleId = `manus${timestamp}`;
 
 const env = {
-  // App branding - update these values directly (do not use env vars)
   appName: "محرابي",
   appSlug: "mihrabi",
-  // Public project branding asset; this stays separate from the native bundle icon.
-  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664033394560/pwXIEnadanxJxbnK.png",
+  logoUrl: "",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
   androidPackage: bundleId,
 };
 
-// Expo serializes this browser-safe subset into native and web bundles. The server-only
-// MANUS_API_KEY and MANUS_JWT_SECRET must never enter this object.
 const publicRuntime = {
   oauthPortalUrl:
     process.env.MANUS_OAUTH_PORTAL_URL ??
@@ -56,37 +47,42 @@ const publicRuntime = {
     process.env.EXPO_PUBLIC_APP_ID ??
     "",
   apiBaseUrl:
-    process.env.EXPO_PUBLIC_API_BASE_URL ||
-    "https://mehrabi-dvz6x8x.manus.space",
+    process.env.EXPO_PUBLIC_API_BASE_URL ??
+    "https://wenausalli-budydcoo.manus.space",
 };
 
 const config: ExpoConfig & { logoUrl: string } = {
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664032199208/lHznBaREXRXrJYDO.png",
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.0",
-  owner: "ahmad11to",
+  version: "1.0.14",
+
   extra: {
     ...publicRuntime,
     eas: {
       projectId: "65020099-6113-42e0-bddc-042a95647ade",
     },
   },
+
   orientation: "portrait",
-  icon: "./assets/images/mehrabi-icon-square.png",
+  icon: "./assets/images/icon.png",
   scheme: env.scheme,
   userInterfaceStyle: "automatic",
+
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
-    "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
-      }
+    infoPlist: {
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
+
   android: {
+    versionCode: 10014,
     adaptiveIcon: {
-      backgroundColor: "#051222",
-      foregroundImage: "./assets/images/mehrabi-icon-square.png",
+      backgroundColor: "#102D4A",
+      foregroundImage: "./assets/images/android-icon-foreground.png",
+      backgroundImage: "./assets/images/android-icon-background.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
     },
     predictiveBackGestureEnabled: false,
@@ -106,11 +102,13 @@ const config: ExpoConfig & { logoUrl: string } = {
       },
     ],
   },
+
   web: {
     bundler: "metro",
     output: "static",
     favicon: "./assets/images/favicon.png",
   },
+
   plugins: [
     "expo-asset",
     "expo-router",
@@ -123,13 +121,15 @@ const config: ExpoConfig & { logoUrl: string } = {
     [
       "expo-location",
       {
-        locationWhenInUsePermission: "نستخدم موقعك لحساب اتجاه القبلة وعرض أماكن الصلاة القريبة منك.",
+        locationWhenInUsePermission:
+          "نستخدم موقعك لعرض أماكن الصلاة القريبة منك.",
       },
     ],
     [
       "expo-audio",
       {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
+        microphonePermission:
+          "Allow $(PRODUCT_NAME) to access your microphone.",
       },
     ],
     [
@@ -145,9 +145,9 @@ const config: ExpoConfig & { logoUrl: string } = {
         image: "./assets/images/splash-icon.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
+        backgroundColor: "#F7F9FA",
         dark: {
-          backgroundColor: "#000000",
+          backgroundColor: "#102D4A",
         },
       },
     ],
@@ -161,6 +161,7 @@ const config: ExpoConfig & { logoUrl: string } = {
       },
     ],
   ],
+
   experiments: {
     typedRoutes: true,
     reactCompiler: true,

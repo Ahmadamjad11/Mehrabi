@@ -80,12 +80,16 @@ export async function exchangeOAuthCode(
   code: string,
   state: string,
 ): Promise<{ sessionToken: string; user: any }> {
-  const result = await apiCall<{ app_session_id: string; user: any }>("/api/oauth/mobile", {
-    method: "POST",
-    body: JSON.stringify({ code, state }),
-  });
+  console.log("[API] exchangeOAuthCode called");
+  // Use GET with query params
+  const params = new URLSearchParams({ code, state });
+  const endpoint = `/api/oauth/mobile?${params.toString()}`;
+  console.log("[API] Calling OAuth mobile endpoint");
+  const result = await apiCall<{ app_session_id: string; user: any }>(endpoint);
 
+  // Convert app_session_id to sessionToken for compatibility
   const sessionToken = result.app_session_id;
+  console.log("[API] OAuth exchange completed");
 
   return {
     sessionToken,

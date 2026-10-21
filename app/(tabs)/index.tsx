@@ -2,8 +2,9 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
-import { createElement, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   AppState,
@@ -26,7 +27,6 @@ import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
 import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { filterApprovedPlaces } from "@/shared/place-visibility";
 
 const COLORS = {
   navy: "#102D4A",
@@ -60,7 +60,6 @@ type Place = {
   lat: number;
   lng: number;
   status?: "approved" | "pending" | "rejected";
-  sourceKey?: string | null;
 };
 
 const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: number; lng: number }) => {
@@ -76,49 +75,9 @@ const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: nu
 const JORDAN_TIME_ZONE = "Asia/Amman";
 const REMINDER_SETTINGS_KEY = "maslay.prayer-reminders.v1";
 const REMINDER_IDS_KEY = "maslay.prayer-reminder-ids.v1";
-const REMINDER_STATE_KEY = "maslay.prayer-reminder-state.v2";
-const PLACES_CACHE_KEY = "maslay.places-cache.v2";
+const PLACES_CACHE_KEY = "maslay.places-cache.v1";
 const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v3";
 const PRAYER_REMINDER_SOUND = "mehrabi_reminder.wav";
-
-type ReminderEntry = { key: string; prayerName: string; triggerAt: number };
-type ReminderGeneration = {
-  generationId: string;
-  status: "building" | "active" | "failed";
-  expectedEntries: ReminderEntry[];
-  notificationIds: string[];
-  createdAt: number;
-};
-type ReminderState = { activeGenerationId: string | null; generations: ReminderGeneration[] };
-
-let prayerReminderQueue: Promise<void> = Promise.resolve();
-
-const enqueuePrayerReminderWork = <T,>(work: () => Promise<T>) => {
-  const next = prayerReminderQueue.catch(() => undefined).then(work);
-  prayerReminderQueue = next.then(() => undefined, () => undefined);
-  return next;
-};
-
-const newReminderGenerationId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
-const readReminderState = async (): Promise<ReminderState> => {
-  const stored = await AsyncStorage.getItem(REMINDER_STATE_KEY);
-  if (!stored) return { activeGenerationId: null, generations: [] };
-  try {
-    const parsed = JSON.parse(stored) as Partial<ReminderState>;
-    const generations = Array.isArray(parsed.generations) ? parsed.generations : [];
-    return {
-      activeGenerationId: typeof parsed.activeGenerationId === "string" ? parsed.activeGenerationId : null,
-      generations: generations.filter((generation): generation is ReminderGeneration =>
-        Boolean(generation && typeof generation.generationId === "string" && Array.isArray(generation.expectedEntries) && Array.isArray(generation.notificationIds)),
-      ),
-    };
-  } catch {
-    return { activeGenerationId: null, generations: [] };
-  }
-};
-
-const writeReminderState = (state: ReminderState) => AsyncStorage.setItem(REMINDER_STATE_KEY, JSON.stringify(state));
 
 if (Notifications.setNotificationHandler) {
   Notifications.setNotificationHandler({
@@ -145,105 +104,57 @@ const configurePrayerNotifications = async () => {
 };
 
 const clearPrayerReminderSchedule = async () => {
+  // Cancel only prayer-time reminders. Deferred ten-minute reminders must
+  // survive the foreground reschedule triggered when an action opens the app.
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  const ids = new Set<string>();
-  for (const item of scheduled) {
-    const data = item.content.data as { prayerReminder?: boolean } | undefined;
-    if (data?.prayerReminder === true) ids.add(item.identifier);
-  }
-  const state = await readReminderState();
-  state.generations.forEach((generation) => generation.notificationIds.forEach((id) => ids.add(id)));
-  const legacy = await AsyncStorage.getItem(REMINDER_IDS_KEY);
-  if (legacy) {
-    try {
-      (JSON.parse(legacy) as unknown[]).forEach((id) => { if (typeof id === "string") ids.add(id); });
-    } catch { /* Ignore malformed legacy state; scheduled metadata above is authoritative. */ }
-  }
-  await Promise.all([...ids].map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-  await AsyncStorage.multiRemove([REMINDER_IDS_KEY, REMINDER_STATE_KEY]);
+  await Promise.all(scheduled
+    .filter((item) => item.trigger && (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
+    .map((item) => Notifications.cancelScheduledNotificationAsync(item.identifier)));
+  const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
+  if (!stored) return;
+  const ids = JSON.parse(stored) as string[];
+  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
+  await AsyncStorage.removeItem(REMINDER_IDS_KEY);
 };
 
-const getScheduledTriggerAt = (item: Notifications.NotificationRequest) => {
-  const trigger = item.trigger as { date?: Date | number } | null;
-  if (!trigger || trigger.date === undefined) return null;
-  return typeof trigger.date === "number" ? trigger.date : trigger.date instanceof Date ? trigger.date.getTime() : null;
-};
-
-const schedulePrayerReminders = (minutesBefore: number, location: { lat: number; lng: number } | null) =>
-  enqueuePrayerReminderWork(async () => {
-    if (Platform.OS === "web") return;
-    const generationId = newReminderGenerationId();
+const schedulePrayerReminders = async (minutesBefore: number, location: { lat: number; lng: number } | null) => {
+  if (Platform.OS === "web") return;
+  const ids: string[] = [];
+  try {
+    await clearPrayerReminderSchedule();
     const now = new Date();
-    const expectedEntries: ReminderEntry[] = [];
     const scheduledKeys = new Set<string>();
     const firstJordanDate = getJordanCalendarDate(now);
     for (let dayOffset = 0; dayOffset < PRAYER_REMINDER_DAYS; dayOffset += 1) {
       const date = new Date(firstJordanDate.getTime());
       date.setDate(date.getDate() + dayOffset);
       const prayerSchedule = getPrayerSchedule(date, location);
+      const scheduledPrayerNames = prayerSchedule.map(([name]) => name);
       for (const [name, prayerTime] of prayerSchedule) {
-        const triggerAt = prayerTime.getTime() - minutesBefore * 60 * 1000;
-        if (triggerAt <= now.getTime()) continue;
-        const key = `${name}:${triggerAt}`;
-        if (scheduledKeys.has(key)) continue;
-        scheduledKeys.add(key);
-        expectedEntries.push({ key, prayerName: name, triggerAt });
-      }
-    }
-    const state = await readReminderState();
-    const building: ReminderGeneration = { generationId, status: "building", expectedEntries, notificationIds: [], createdAt: Date.now() };
-    await writeReminderState({ ...state, generations: [...state.generations, building] });
-    try {
-      for (const entry of expectedEntries) {
-        const prayerSchedule = getPrayerSchedule(new Date(entry.triggerAt + minutesBefore * 60 * 1000), location);
-        const prayerNames = prayerSchedule.map(([name]) => name);
-        const notificationId = await Notifications.scheduleNotificationAsync({
+        const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
+        if (triggerDate <= now) continue;
+        const reminderKey = `${name}:${triggerDate.getTime()}`;
+        if (scheduledKeys.has(reminderKey)) continue;
+        scheduledKeys.add(reminderKey);
+        const id = await Notifications.scheduleNotificationAsync({
           content: {
             title: "نداء محرابي",
-            body: buildPrayerReminderBody(minutesBefore, entry.prayerName, prayerNames),
+            body: buildPrayerReminderBody(minutesBefore, name, scheduledPrayerNames),
             sound: PRAYER_REMINDER_SOUND,
-            data: { prayerName: entry.prayerName, reminderKey: entry.key, generationId, prayerReminder: true },
+            data: { prayerName: name, reminderKey, prayerReminder: true },
           },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(entry.triggerAt), channelId: PRAYER_REMINDER_CHANNEL },
+          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
         });
-        building.notificationIds.push(notificationId);
-        await writeReminderState({ ...state, generations: [...state.generations.filter((item) => item.generationId !== generationId), building] });
-        console.info("[PrayerReminder] scheduled", { prayerName: entry.prayerName, prayerTimeISO: new Date(entry.triggerAt + minutesBefore * 60 * 1000).toISOString(), triggerTimeISO: new Date(entry.triggerAt).toISOString(), nowISO: now.toISOString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, minutesBefore, generationId });
+        ids.push(id);
       }
-      const actual = await Notifications.getAllScheduledNotificationsAsync();
-      const actualForGeneration = actual.filter((item) => (item.content.data as { generationId?: string } | undefined)?.generationId === generationId);
-      const valid = expectedEntries.every((entry) => actualForGeneration.some((item) => {
-        const data = item.content.data as { reminderKey?: string; prayerName?: string } | undefined;
-        const actualTrigger = getScheduledTriggerAt(item);
-        return data?.reminderKey === entry.key && data.prayerName === entry.prayerName && actualTrigger !== null && Math.abs(actualTrigger - entry.triggerAt) <= 5000;
-      }));
-      if (!valid) throw new Error(`Reminder generation ${generationId} failed verification (${actualForGeneration.length}/${expectedEntries.length})`);
-      const activeState = await readReminderState();
-      const oldGenerations = activeState.generations.filter((item) => item.generationId !== generationId);
-      const orphanedPrayerIds = actual
-        .filter((item) => {
-          const data = item.content.data as { prayerReminder?: boolean; generationId?: string } | undefined;
-          return data?.prayerReminder === true && data.generationId !== generationId;
-        })
-        .map((item) => item.identifier);
-      const legacyIds: string[] = [];
-      const legacyStored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
-      if (legacyStored) {
-        try {
-          (JSON.parse(legacyStored) as unknown[]).forEach((id) => { if (typeof id === "string") legacyIds.push(id); });
-        } catch { /* Ignore malformed legacy state. */ }
-      }
-      await writeReminderState({ activeGenerationId: generationId, generations: [...activeState.generations.filter((item) => item.generationId !== generationId), { ...building, status: "active" }] });
-      await Promise.all([...oldGenerations.flatMap((generation) => generation.notificationIds), ...legacyIds, ...orphanedPrayerIds].map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-      await AsyncStorage.removeItem(REMINDER_IDS_KEY);
-      await writeReminderState({ activeGenerationId: generationId, generations: [{ ...building, status: "active" }] });
-    } catch (error) {
-      await Promise.all(building.notificationIds.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-      const latestState = await readReminderState();
-      await writeReminderState({ activeGenerationId: latestState.activeGenerationId === generationId ? null : latestState.activeGenerationId, generations: latestState.generations.filter((item) => item.generationId !== generationId) });
-      throw error;
     }
-  });
+    await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
+  } catch (error) {
+    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
+    await AsyncStorage.removeItem(REMINDER_IDS_KEY).catch(() => undefined);
+    throw error;
+  }
+};
 
 const getJordanCalendarDate = (value: Date) => {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -297,13 +208,29 @@ const formatCountdown = (target: Date, now: Date) => {
   return `${hours}:${minutes}:${rest}`;
 };
 
+const bearingToKaaba = (latitude: number, longitude: number) => {
+  const targetLat = (21.4225 * Math.PI) / 180;
+  const currentLat = (latitude * Math.PI) / 180;
+  const deltaLong = ((39.8262 - longitude) * Math.PI) / 180;
+  const bearing = (Math.atan2(Math.sin(deltaLong), Math.cos(currentLat) * Math.tan(targetLat) - Math.sin(currentLat) * Math.cos(deltaLong)) * 180) / Math.PI;
+  return (bearing + 360) % 360;
+};
+
+const distanceToKaabaKm = (latitude: number, longitude: number) => {
+  const earthRadiusKm = 6371;
+  const lat1 = (latitude * Math.PI) / 180;
+  const lat2 = (21.4225 * Math.PI) / 180;
+  const dLat = lat2 - lat1;
+  const dLng = ((39.8262 - longitude) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
 const createOsmHtml = (places: Place[], userLocation: { lat: number; lng: number } | null) => {
-  const points = JSON.stringify(places.map((place) => [place.lat, place.lng, place.name, place.type]))
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e");
+  const points = JSON.stringify(places.map((place) => [place.lat, place.lng, place.name, place.type]));
   const center = userLocation ? `[${userLocation.lat},${userLocation.lng}]` : "[31.9539,35.9106]";
   const userMarker = userLocation ? `L.circleMarker([${userLocation.lat},${userLocation.lng}],{radius:8,color:'#4A94F5',fillColor:'#4A94F5',fillOpacity:.9}).addTo(map).bindPopup('موقعك الحالي');` : "";
-  return `<!doctype html><html lang="ar" dir="rtl"><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0;background:#e3efef}.leaflet-control-attribution{font-size:8px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map',{zoomControl:false}).setView(${center},13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);const points=${points};points.forEach(([lat,lng,name,type])=>{const color=type==='مسجد'?'#2B9A76':'#7C8EDB';const marker=L.circleMarker([lat,lng],{radius:8,color:'#fff',weight:2,fillColor:color,fillOpacity:.98}).addTo(map);const popup=document.createElement('div');const title=document.createElement('strong');title.textContent=String(name);popup.appendChild(title);popup.appendChild(document.createElement('br'));popup.appendChild(document.createTextNode(String(type)));marker.bindPopup(popup)});${userMarker}</script></body></html>`;
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0;background:#e3efef}.leaflet-control-attribution{font-size:8px}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map',{zoomControl:false}).setView(${center},13);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);const points=${points};points.forEach(([lat,lng,name,type])=>{const color=type==='مسجد'?'#2B9A76':'#7C8EDB';L.circleMarker([lat,lng],{radius:8,color:'#fff',weight:2,fillColor:color,fillOpacity:.98}).addTo(map).bindPopup('<strong>'+name+'</strong><br/>'+type)});${userMarker}</script></body></html>`;
 };
 
 const createPickerHtml = (location: { lat: number; lng: number }) => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map').setView([${location.lat},${location.lng}],16);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);let marker=L.marker([${location.lat},${location.lng}]).addTo(map);map.on('click',e=>{marker.setLatLng(e.latlng);window.ReactNativeWebView.postMessage(JSON.stringify({lat:e.latlng.lat,lng:e.latlng.lng}))});</script></body></html>`;
@@ -316,11 +243,17 @@ export default function HomeScreen() {
   const [usingCachedPlaces, setUsingCachedPlaces] = useState(false);
   const [activeFilter, setActiveFilter] = useState("nearest");
   const [placeTypeFilter, setPlaceTypeFilter] = useState<"all" | "mosque" | "musalla">("all");
+  const [favorites, setFavorites] = useState<string[]>([]);
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [language, setLanguage] = useState<"ar" | "en">("ar");
   const [now, setNow] = useState(() => new Date());
-  const [activeTab, setActiveTab] = useState<"home" | "explore" | "account">("home");
+  const [compassHeading, setCompassHeading] = useState(0);
+  const [headingReady, setHeadingReady] = useState(false);
+  const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
+  const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
+  const headingStreamRef = useRef(false);
+  const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
@@ -385,17 +318,7 @@ export default function HomeScreen() {
   };
   const placesQuery = trpc.places.list.useQuery(serverPlaceFilters, { staleTime: 60_000, retry: 2 });
   const meQuery = trpc.auth.me.useQuery();
-  const favoriteIdsQuery = trpc.places.favoriteIds.useQuery({ userId: meQuery.data?.id ?? 0 }, {
-    enabled: Boolean(meQuery.data),
-    staleTime: 0,
-  });
-  const favorites = meQuery.data ? (favoriteIdsQuery.data ?? []).map(String) : [];
-  const trpcUtils = trpc.useUtils();
   const logoutMutation = trpc.auth.logout.useMutation();
-  const setFavoriteMutation = trpc.places.setFavorite.useMutation({
-    onSuccess: async () => { await favoriteIdsQuery.refetch(); },
-    onError: (error) => Alert.alert(language === "ar" ? "تعذر تحديث المفضلة" : "Could not update favorites", error.message),
-  });
   const nearestPlaces = trpc.places.nearest.useMutation();
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
@@ -408,7 +331,7 @@ export default function HomeScreen() {
         return;
       }
     } else if (Platform.OS !== "web") {
-      await enqueuePrayerReminderWork(clearPrayerReminderSchedule);
+      await clearPrayerReminderSchedule();
       reminderScheduleKeyRef.current = null;
     }
     setReminderMinutes(minutes as 15 | 30 | 45);
@@ -502,16 +425,14 @@ export default function HomeScreen() {
   useEffect(() => {
     if (activeFilter === "nearest" && userLocation) return;
     if (!placesQuery.data) return;
-    const approvedPage = filterApprovedPlaces(placesQuery.data);
     // Synchronize the accumulated view with the latest server page.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadedApiPlaces((current) => {
-      const approvedCurrent = filterApprovedPlaces(current);
-      if (placeOffset === 0) return approvedPage;
-      const known = new Set(approvedCurrent.map((place) => place.id));
-      return [...approvedCurrent, ...approvedPage.filter((place) => !known.has(place.id))];
+      if (placeOffset === 0) return placesQuery.data;
+      const known = new Set(current.map((place) => place.id));
+      return [...current, ...placesQuery.data.filter((place) => !known.has(place.id))];
     });
-    void AsyncStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(approvedPage));
+    void AsyncStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(placesQuery.data));
     setUsingCachedPlaces(false);
   }, [activeFilter, placeOffset, placesQuery.data, userLocation]);
 
@@ -519,9 +440,7 @@ export default function HomeScreen() {
     void AsyncStorage.getItem(PLACES_CACHE_KEY).then((value) => {
       if (!value || loadedApiPlaces.length > 0 || placesQuery.data) return;
       try {
-        const parsed = JSON.parse(value) as unknown;
-        if (!Array.isArray(parsed)) return;
-        const cached = filterApprovedPlaces(parsed as any[]);
+        const cached = JSON.parse(value) as any[];
         if (cached.length > 0) {
           setLoadedApiPlaces(cached);
           setUsingCachedPlaces(true);
@@ -532,13 +451,11 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (activeFilter !== "nearest" || !nearestPlaces.data) return;
-    const approvedNearest = filterApprovedPlaces(nearestPlaces.data);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadedApiPlaces((current) => {
-      const approvedCurrent = filterApprovedPlaces(current);
-      if (placeOffset === 0) return approvedNearest;
-      const known = new Set(approvedCurrent.map((place) => place.id));
-      return [...approvedCurrent, ...approvedNearest.filter((place) => !known.has(place.id))];
+      if (placeOffset === 0) return nearestPlaces.data;
+      const known = new Set(current.map((place) => place.id));
+      return [...current, ...nearestPlaces.data.filter((place) => !known.has(place.id))];
     });
   }, [activeFilter, nearestPlaces.data, placeOffset]);
 
@@ -546,6 +463,16 @@ export default function HomeScreen() {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    void AsyncStorage.getItem("maslay:favorites").then((value) => {
+      if (value) setFavorites(JSON.parse(value));
+    });
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.setItem("maslay:favorites", JSON.stringify(favorites));
+  }, [favorites]);
 
   useEffect(() => {
     let watcher: Location.LocationSubscription | null = null;
@@ -582,6 +509,53 @@ export default function HomeScreen() {
     };
   }, [language, locationEnabled]);
 
+  useEffect(() => {
+    let subscription: { remove: () => void } | null = null;
+    let magnetometerSubscription: { remove: () => void } | null = null;
+    if (activeTab !== "qibla") {
+      headingStreamRef.current = false;
+      return () => undefined;
+    }
+    headingStreamRef.current = false;
+    const smoothHeading = (next: number) => {
+      const normalized = (next + 360) % 360;
+      setCompassHeading((previous) => {
+        const delta = ((normalized - previous + 540) % 360) - 180;
+        return (previous + delta * 0.28 + 360) % 360;
+      });
+      setHeadingReady(true);
+    };
+    if (Platform.OS !== "web") void Magnetometer.requestPermissionsAsync().catch(() => undefined);
+    Location.watchHeadingAsync((heading) => {
+      // trueHeading is corrected for magnetic declination when available.
+      const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
+      if (Number.isFinite(value)) {
+        headingStreamRef.current = true;
+        setHeadingSource("gps");
+        setHeadingAccuracy(Number.isFinite(heading.accuracy) ? heading.accuracy : null);
+        smoothHeading(value);
+      }
+    }).then((next) => { subscription = next; }).catch(() => {
+      // Magnetometer fallback below handles devices without Location heading support.
+    });
+    if (Platform.OS !== "web" && typeof Magnetometer.addListener === "function") {
+      Magnetometer.setUpdateInterval(120);
+      magnetometerSubscription = Magnetometer.addListener(({ x, y }) => {
+        if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
+        // Expo's native axes point east/north; convert them to a clockwise heading.
+        const heading = (Math.atan2(y, x) * 180) / Math.PI;
+        setHeadingSource("sensor");
+        setHeadingAccuracy(null);
+        smoothHeading((360 - heading + 360) % 360);
+      });
+    }
+    return () => {
+      subscription?.remove();
+      magnetometerSubscription?.remove();
+      headingStreamRef.current = false;
+    };
+  }, [activeTab, locationEnabled]);
+
   const prayerState = useMemo(() => {
     const today = getPrayerSchedule(now, userLocation);
     let next = today.find(([, time]) => time.getTime() > now.getTime());
@@ -593,7 +567,11 @@ export default function HomeScreen() {
     return { name: next[0], time: next[1] };
   }, [now, userLocation]);
 
-  const apiPlaces: Place[] = filterApprovedPlaces(loadedApiPlaces).map((place) => ({
+  const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
+  const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
+  const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
+
+  const apiPlaces: Place[] = loadedApiPlaces.map((place) => ({
     id: String(place.id),
     name: place.name,
     type: place.type === "mosque" ? "مسجد" : place.type === "mall" ? "مصلى مول" : place.type === "station" ? "مصلى محطة" : "مصلى",
@@ -606,7 +584,6 @@ export default function HomeScreen() {
     lat: place.latitude,
     lng: place.longitude,
     status: place.status,
-    sourceKey: place.sourceKey,
     distanceMeters: userLocation ? Math.round(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).includes("كم") ? Number(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).replace(" كم", "")) * 1000 : Number(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).replace(" م", ""))) : Number.MAX_SAFE_INTEGER,
   }));
   const sourcePlaces = apiPlaces;
@@ -637,13 +614,7 @@ export default function HomeScreen() {
   };
 
   const toggleFavorite = (id: string) => {
-    if (!meQuery.data) {
-      setActiveTab("account");
-      return;
-    }
-    const placeId = Number(id);
-    if (!Number.isSafeInteger(placeId) || placeId <= 0 || setFavoriteMutation.isPending) return;
-    setFavoriteMutation.mutate({ placeId, enabled: !favorites.includes(id) });
+    setFavorites((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
   };
 
   const requestLocation = async () => {
@@ -662,9 +633,12 @@ export default function HomeScreen() {
     }
   };
 
-  const openQibla = () => {
-    setActiveTab("home");
-    router.push({ pathname: "/(tabs)/qibla" as never, params: { lang: language } });
+  const openQibla = async () => {
+    setHeadingReady(false);
+    setHeadingSource(null);
+    setHeadingAccuracy(null);
+    setActiveTab("qibla");
+    if (!locationEnabled) await requestLocation();
   };
 
   const beginLogin = async () => {
@@ -690,42 +664,25 @@ export default function HomeScreen() {
     setEmailAuthError(null);
     setEmailAuthMessage(null);
     try {
-      const endpoint = emailAuthNeedsOtp ? "verify-otp" : emailAuthMode === "register" ? "register" : emailAuthMode === "forgot" ? "forgot-password" : "login";
-      const body = emailAuthNeedsOtp
-        ? { email: emailAuthEmail, code: emailAuthOtp }
-        : emailAuthMode === "register"
-          ? { name: emailAuthName, phone: emailAuthPhone, email: emailAuthEmail, password: emailAuthPassword }
-          : emailAuthMode === "forgot"
-            ? { email: emailAuthEmail }
-            : { identifier: emailAuthEmail, password: emailAuthPassword };
+      const endpoint = emailAuthMode === "register" ? "register" : emailAuthMode === "forgot" ? "forgot-password" : "login";
+      const body = emailAuthMode === "register"
+        ? { name: emailAuthName, phone: emailAuthPhone, email: emailAuthEmail, password: emailAuthPassword }
+        : emailAuthMode === "forgot"
+          ? { email: emailAuthEmail }
+          : { identifier: emailAuthEmail, password: emailAuthPassword };
       const response = await fetch(`${getApiBaseUrl()}/api/auth/email/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-client-platform": Platform.OS === "web" ? "web" : "native" },
         credentials: "include",
         body: JSON.stringify(body),
       });
-      const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string; app_session_id?: string; code?: string; verificationRequired?: boolean };
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string; app_session_id?: string; code?: string };
       if (!response.ok) {
-        if (payload.code === "EMAIL_AUTH_UNAVAILABLE") {
-          throw new Error(language === "ar" ? payload.error || "استخدم تسجيل الدخول عبر Manus." : "Email sign-up is unavailable until outgoing email is configured. Use Manus sign-in.");
-        }
-        if (payload.code === "EMAIL_NOT_VERIFIED" && emailAuthMode === "login") {
-          setEmailAuthNeedsOtp(true);
-          setEmailAuthCanResend(true);
-          setEmailAuthMessage(language === "ar" ? "أكد بريدك برمز التحقق لإكمال تسجيل الدخول." : "Verify your email with the code to continue.");
-          return;
-        }
         throw new Error(payload.error || (language === "ar" ? "تعذر إكمال العملية." : "Unable to complete the request."));
       }
-      if (emailAuthMode === "register" && payload.verificationRequired) {
-        setEmailAuthNeedsOtp(true);
-        setEmailAuthCanResend(true);
-        setEmailAuthMessage(language === "ar" ? "أدخل رمز التحقق الذي أُرسل إلى بريدك الإلكتروني." : "Enter the verification code sent to your email.");
-      } else if (emailAuthMode === "login" || emailAuthNeedsOtp) {
+      if (emailAuthMode === "login" || emailAuthMode === "register") {
         if (payload.app_session_id) await Auth.setSessionToken(payload.app_session_id);
         await meQuery.refetch();
-        setEmailAuthNeedsOtp(false);
-        setEmailAuthCanResend(false);
         setEmailAuthVisible(false);
       } else {
         setEmailAuthMessage(ui.resetSent);
@@ -759,28 +716,14 @@ export default function HomeScreen() {
   };
 
   const signOut = async () => {
-    const userId = meQuery.data?.id;
-    if (userId) await trpcUtils.places.favoriteIds.cancel({ userId });
     try {
       await logoutMutation.mutateAsync();
-    } catch (error) {
-      if (userId) void favoriteIdsQuery.refetch();
-      Alert.alert(
-        language === "ar" ? "تعذر تسجيل الخروج" : "Could not sign out",
-        language === "ar" ? "تحقق من الاتصال وحاول مجددًا؛ بقيت جلستك فعالة." : "Check your connection and try again; your session remains active.",
-      );
-      return;
+    } finally {
+      await Auth.removeSessionToken();
+      await Auth.clearUserInfo();
+      await meQuery.refetch({ cancelRefetch: true });
+      setActiveTab("home");
     }
-    await Auth.removeSessionToken();
-    await Auth.clearUserInfo();
-    await trpcUtils.auth.me.cancel();
-    trpcUtils.auth.me.setData(undefined, null);
-    if (userId) {
-      await trpcUtils.places.favoriteIds.cancel({ userId });
-      trpcUtils.places.favoriteIds.setData({ userId }, []);
-    }
-    await meQuery.refetch({ cancelRefetch: true });
-    setActiveTab("home");
   };
 
   const placeGroups: { groupTitle: string; groupPlaces: Place[] }[] = [
@@ -793,7 +736,7 @@ export default function HomeScreen() {
 
   const openAddPlace = () => {
     if (!meQuery.data) {
-      void beginLogin();
+      openEmailAuth("login");
       return;
     }
     setSubmitError(null);
@@ -902,15 +845,15 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.mapCard}>
-          {Platform.OS !== "web" ? <WebView source={{ html: createOsmHtml(sourcePlaces, userLocation) }} style={styles.nativeMap} originWhitelist={["*"]} javaScriptEnabled /> : createElement("iframe", { title: language === "ar" ? "خريطة الأماكن المعتمدة" : "Approved places map", srcDoc: createOsmHtml(sourcePlaces, userLocation), loading: "lazy", referrerPolicy: "no-referrer", style: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: 0 } })}
+          {Platform.OS !== "web" ? <WebView source={{ html: createOsmHtml(sourcePlaces, userLocation) }} style={styles.nativeMap} originWhitelist={["*"]} javaScriptEnabled /> : null}
           <View style={styles.mapHeader}><View style={styles.mapTitleBadge}><Ionicons name="navigate-outline" size={13} color={COLORS.green} /><Text style={styles.mapBadge}>{ui.mapLocation}</Text></View><Text style={styles.mapProvider}>OpenStreetMap</Text></View>
+          {Platform.OS === "web" ? <><View style={[styles.mapRoad, styles.roadOne]} /><View style={[styles.mapRoad, styles.roadTwo]} /><View style={[styles.mapRoad, styles.roadThree]} /><View style={styles.mapWater} /><View style={[styles.mapPin, { top: 52, right: 78 }]}><Ionicons name="location" size={28} color={COLORS.navy} /><View style={styles.pinNumber}><Text style={styles.pinNumberText}>1</Text></View></View><View style={[styles.mapPin, { top: 101, right: 178 }]}><Ionicons name="location" size={28} color={COLORS.teal} /><View style={styles.pinNumber}><Text style={styles.pinNumberText}>2</Text></View></View><View style={[styles.mapPin, { top: 153, right: 112 }]}><Ionicons name="location" size={28} color={COLORS.gold} /><View style={styles.pinNumber}><Text style={styles.pinNumberText}>3</Text></View></View><View style={styles.currentLocation}><View style={styles.currentDot} /></View></> : null}
           <Pressable style={styles.mapControl} onPress={requestLocation}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
           <View style={styles.mapLegend}><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.mosqueGreen }]} /><Text style={styles.legendText}>{ui.mosques}</Text></View><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.musallaBlue }]} /><Text style={styles.legendText}>{ui.musallas}</Text></View>{locationEnabled && <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendLocation]} /><Text style={styles.legendText}>{language === "ar" ? "موقعك" : "You"}</Text></View>}</View>
         </View>
 
         {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
         <View style={styles.listHeader}><Text style={styles.nearbyCount}>{filteredPlaces.length} {ui.nearbyCount}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
-        {activeFilter === "favorites" && filteredPlaces.length === 0 && <Text style={styles.offlineNotice}>{!meQuery.data ? (language === "ar" ? "سجّل الدخول من تبويب حسابي لعرض المفضلة وحفظها." : "Sign in from the Account tab to view and save favorites.") : (language === "ar" ? "لم تحفظ أي مكان في المفضلة بعد." : "You have not saved any places yet.")}</Text>}
         {placeGroups.map(({ groupTitle, groupPlaces }) => groupPlaces.length > 0 && <View key={groupTitle}>
           <Text style={[styles.groupTitle, groupTitle === ui.mosques ? styles.mosqueTitle : styles.musallaTitle]}>{groupTitle}</Text>
           {groupPlaces.map((place) => (
@@ -918,7 +861,7 @@ export default function HomeScreen() {
             <View style={styles.placeMain}>
               <View style={[styles.placeIcon, place.type === "مسجد" ? styles.mosqueIcon : styles.musallaIcon]}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={place.type === "مسجد" ? COLORS.mosqueGreen : COLORS.musallaBlue} /></View>
               <View style={styles.placeInfo}>
-                <View style={styles.nameRow}><Text style={styles.placeName}>{place.name}</Text>{place.sourceKey && <View style={styles.officialPlacePill}><Text style={styles.officialPlaceText}>{language === "ar" ? "رسمي" : "Official"}</Text></View>}<View style={[styles.typePill, place.type === "مسجد" ? styles.typePillMosque : styles.typePillMusalla]}><Text style={styles.typePillText}>{language === "ar" ? place.type : (place.type === "مسجد" ? "Mosque" : "Musalla")}</Text></View></View>
+                <View style={styles.nameRow}><Text style={styles.placeName}>{place.name}</Text><View style={[styles.typePill, place.type === "مسجد" ? styles.typePillMosque : styles.typePillMusalla]}><Text style={styles.typePillText}>{language === "ar" ? place.type : (place.type === "مسجد" ? "Mosque" : "Musalla")}</Text></View></View>
                 <View style={styles.statusRow}>{place.status === "pending" && <View style={styles.unverifiedPill}><Ionicons name="time-outline" size={11} color={COLORS.muted} /><Text style={styles.unverifiedText}>{ui.unverified}</Text></View>}<View style={[styles.openPill, place.open === false && styles.closedPill, place.open === null && styles.unknownPill]}><Text style={[styles.openText, place.open === false && styles.closedText, place.open === null && styles.unknownText]}>{place.open === true ? (language === "ar" ? "مفتوح" : "Open") : place.open === false ? (language === "ar" ? "مغلق" : "Closed") : ui.unknownHours}</Text></View></View>
                 <View style={styles.distanceRow}><Text style={styles.distanceValue}>{place.distance}</Text><Text style={styles.distanceHint}>{language === "ar" ? "على بُعد دقائق منك" : "minutes away"}</Text></View>
                 <View style={styles.amenities}><Text style={styles.metaTime}>{language === "ar" ? "قريب" : "Nearby"}</Text>{place.ablution && <Text style={styles.amenity}><Ionicons name="water" size={13} color={COLORS.teal} /> {language === "ar" ? "وضوء" : "Ablution"}</Text>}{place.parking && <Text style={styles.amenity}><Ionicons name="car" size={13} color={COLORS.muted} /> {language === "ar" ? "موقف" : "Parking"}</Text>}</View>
@@ -950,26 +893,29 @@ export default function HomeScreen() {
                 <Pressable style={[styles.exploreTypeCard, styles.exploreMusallaCard]} onPress={() => { setPlaceTypeFilter("musalla"); setActiveFilter("nearest"); setActiveTab("home"); }}><View style={[styles.exploreCardIcon, styles.exploreCardIconBlue]}><MaterialCommunityIcons name="home-city-outline" size={23} color={COLORS.musallaBlue} /></View><Text style={styles.exploreCardTitle}>{ui.musallas}</Text><Text style={styles.exploreCardCount}>{musallas.length} {language === "ar" ? "قريب" : "nearby"}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "عرض المصليات ←" : "View musallas →"}</Text></Pressable>
               </View>
               <View style={styles.exploreLocationNote}><Ionicons name={locationEnabled ? "checkmark-circle" : "location-outline"} size={17} color={locationEnabled ? COLORS.green : COLORS.gold} /><Text style={styles.exploreLocationText}>{locationEnabled ? (language === "ar" ? "نعرض لك الأماكن الأقرب حسب موقعك الحالي." : "Showing places nearest to your current location.") : (language === "ar" ? "فعّل موقعك لنقترح الأماكن الأقرب لك." : "Enable your location for the nearest places.")}</Text></View>
-              <Pressable
-                style={styles.officialDirectoryButton}
-                onPress={() => {
-                  setActiveTab("home");
-                  router.push({ pathname: "/(tabs)/official", params: { lang: language } });
-                }}
-              >
-                <View style={styles.officialDirectoryIcon}><Ionicons name="business-outline" size={18} color={COLORS.gold} /></View>
-                <View style={styles.officialDirectoryCopy}>
-                  <Text style={styles.officialDirectoryTitle}>{language === "ar" ? "دليل المساجد الرسمي" : "Official mosque directory"}</Text>
-                  <Text style={styles.officialDirectoryHint}>{language === "ar" ? "سجلات وزارة الأوقاف الأردنية" : "Jordan Ministry of Awqaf records"}</Text>
-                </View>
-                <Ionicons name="chevron-back" size={17} color={COLORS.teal} />
-              </Pressable>
               <Text style={styles.exploreQuickTitle}>{language === "ar" ? "اختصارات ذكية" : "Smart shortcuts"}</Text>
               <View style={styles.exploreQuickGrid}>{filterOptions.filter((filter) => filter.key !== "nearest").map((filter) => <Pressable key={filter.key} style={styles.exploreQuickItem} onPress={() => { setPlaceTypeFilter("all"); setActiveFilter(filter.key); setActiveTab("home"); }}><Ionicons name={filter.key === "open" ? "time-outline" : filter.key === "ablution" ? "water-outline" : filter.key === "women" ? "people-outline" : "heart-outline"} size={17} color={COLORS.teal} /><Text style={styles.exploreQuickText}>{filter.label}</Text><Ionicons name="chevron-back" size={15} color={COLORS.muted} /></Pressable>)}</View>
             </>}
+            {activeTab === "qibla" && <>
+              <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
+              <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{language === "ar" ? "تعمل تلقائيًا — بلا معايرة" : "Automatic — no calibration"}</Text></View>
+              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "أمسك هاتفك بأي اتجاه؛ السهم يصحح نفسه ويشير للكعبة" : "Hold your phone in any direction; the arrow corrects itself toward the Kaaba"}</Text>
+              <View style={styles.qiblaCompass}>
+                <View style={styles.qiblaGlow} />
+                <View style={styles.qiblaRing}>
+                  <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
+                  <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><MaterialCommunityIcons name="cube-outline" size={20} color={COLORS.white} /></View></View>
+                  <View style={styles.qiblaCenter} />
+                </View>
+              </View>
+              <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(kaabaDistance).toLocaleString(language === "ar" ? "ar-JO" : "en-US")}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "كم إلى الكعبة" : "km to Kaaba"}</Text></View></View>
+              <View style={styles.qiblaAutoNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.teal} /><Text style={styles.qiblaAutoNoteText}>{userLocation ? (language === "ar" ? "لا تحتاج معرفة 161° أو تحريك الهاتف إلى زاوية معينة. نقرأ اتجاه الهاتف ونحسب الفرق تلقائيًا." : "You do not need to know 161° or point your phone to a fixed angle. We read your heading and calculate the difference automatically.") : (language === "ar" ? "فعّل الموقع ليبدأ الحساب التلقائي للقبلة." : "Enable location to start automatic Qibla calculation.")}</Text></View>
+              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? `البوصلة جاهزة · ${headingSource === "gps" ? "اتجاه حقيقي" : "حساس الهاتف"}${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · ${headingSource === "gps" ? "true heading" : "phone sensor"}`) : (language === "ar" ? "جارٍ تشغيل الموقع والحساس تلقائيًا" : "Starting location and sensors automatically")}</Text></View>
+              {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
+            </>}
             {activeTab === "account" && <>
               <View style={styles.accountHero}><View style={styles.accountHeroIcon}><Ionicons name={meQuery.data ? "person" : "person-outline"} size={27} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{meQuery.data ? (language === "ar" ? `أهلًا ${meQuery.data.name || "بك"}` : `Welcome ${meQuery.data.name || ""}`) : ui.accountTitle}</Text><Text style={styles.modalHint}>{meQuery.data ? (language === "ar" ? "حسابك جاهز لإضافة الأماكن وكتابة التقييمات." : "Your account is ready for adding places and reviews.") : (language === "ar" ? "الحساب اختياري. تحتاجه فقط لإضافة مكان أو كتابة تقييم." : ui.accountHint)}</Text></View>
-              {!meQuery.data && <View style={styles.accountAuthCard}><View style={styles.accountBenefit}><Ionicons name="shield-checkmark-outline" size={19} color={COLORS.green} /><Text style={styles.accountBenefitText}>{language === "ar" ? "بياناتك محفوظة بأمان" : "Your data stays secure"}</Text></View><Pressable style={styles.primaryModalButton} onPress={beginLogin}><Text style={styles.primaryModalText}>{language === "ar" ? "تسجيل الدخول عبر Manus" : "Sign in with Manus"}</Text></Pressable><Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("login")}><Text style={styles.secondaryModalText}>{ui.emailLogin}</Text></Pressable><Pressable style={styles.authLink} onPress={() => openEmailAuth("register")}><Text style={styles.authLinkText}>{ui.emailRegister}</Text></Pressable></View>}
+              {!meQuery.data && <View style={styles.accountAuthCard}><View style={styles.accountBenefit}><Ionicons name="shield-checkmark-outline" size={19} color={COLORS.green} /><Text style={styles.accountBenefitText}>{language === "ar" ? "بياناتك محفوظة بأمان" : "Your data stays secure"}</Text></View><Pressable style={styles.primaryModalButton} onPress={() => openEmailAuth("login")}><Text style={styles.primaryModalText}>{ui.emailLogin}</Text></Pressable><Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("register")}><Text style={styles.secondaryModalText}>{ui.emailRegister}</Text></Pressable><Pressable style={styles.authLink} onPress={beginLogin}><Text style={styles.authLinkText}>{language === "ar" ? "تسجيل الدخول بطريقة أخرى" : "Use another sign-in method"}</Text></Pressable></View>}
               {meQuery.data && <View style={styles.accountSignedIn}><View style={styles.accountUserRow}><View style={styles.accountAvatar}><Text style={styles.accountAvatarText}>{(meQuery.data.name || "م").slice(0, 1)}</Text></View><View style={styles.accountUserCopy}><Text style={styles.accountUserName}>{meQuery.data.name || "مستخدم محرابي"}</Text><Text style={styles.accountUserHint}>{language === "ar" ? "عضو في مجتمع محرابي" : "Mehrabi community member"}</Text></View><Ionicons name="checkmark-circle" size={20} color={COLORS.green} /></View></View>}
               <View style={styles.reminderBox}>
                 <View style={styles.reminderHeader}><View><Text style={styles.reminderTitle}>{language === "ar" ? "تذكير الصلاة" : "Prayer reminder"}</Text><Text style={styles.reminderHint}>{language === "ar" ? "تنبيه محلي قبل الصلاة، ويمكنك اختيار نعم أو تأجيله" : "A local reminder before prayer; choose done or snooze"}</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: remindersEnabled }} onPress={() => void updatePrayerReminders(!remindersEnabled)} style={[styles.reminderSwitch, remindersEnabled && styles.reminderSwitchOn]}><View style={[styles.reminderKnob, remindersEnabled && styles.reminderKnobOn]} /></Pressable></View>
@@ -1012,12 +958,12 @@ export default function HomeScreen() {
           {emailAuthError && <Text style={styles.formError}>{emailAuthError}</Text>}
           <Pressable style={styles.primaryModalButton} disabled={emailAuthBusy} onPress={submitEmailAuth}><Text style={styles.primaryModalText}>{emailAuthBusy ? (language === "ar" ? "جاري المعالجة..." : "Working...") : emailAuthNeedsOtp ? (language === "ar" ? "تأكيد الرمز" : "Verify code") : emailAuthMode === "register" ? ui.createAccount : emailAuthMode === "forgot" ? ui.sendReset : ui.login}</Text></Pressable>
           {emailAuthCanResend && <Pressable style={styles.authLink} disabled={emailAuthBusy} onPress={resendVerification}><Text style={styles.authLinkText}>{ui.resendVerification}</Text></Pressable>}
-          {emailAuthMode === "login" && !emailAuthNeedsOtp && <>
+          {emailAuthMode === "login" && <>
             <Pressable style={styles.authLink} onPress={() => openEmailAuth("forgot")}><Text style={styles.authLinkText}>{ui.forgotPassword}</Text></Pressable>
             <Pressable style={styles.secondaryModalButton} onPress={() => openEmailAuth("register")}><Text style={styles.secondaryModalText}>{ui.emailRegister}</Text></Pressable>
           </>}
-          {emailAuthMode === "register" && !emailAuthNeedsOtp && <Pressable style={styles.authLink} onPress={() => openEmailAuth("login")}><Text style={styles.authLinkText}>{ui.haveAccount}</Text></Pressable>}
-          {emailAuthMode === "forgot" && !emailAuthNeedsOtp && <Pressable style={styles.authLink} onPress={() => openEmailAuth("login")}><Text style={styles.authLinkText}>{ui.backToLogin}</Text></Pressable>}
+          {emailAuthMode === "register" && <Pressable style={styles.authLink} onPress={() => openEmailAuth("login")}><Text style={styles.authLinkText}>{ui.haveAccount}</Text></Pressable>}
+          {emailAuthMode === "forgot" && <Pressable style={styles.authLink} onPress={() => openEmailAuth("login")}><Text style={styles.authLinkText}>{ui.backToLogin}</Text></Pressable>}
         </View></View>
       </Modal>
       <Modal visible={addFormVisible} animationType="slide" transparent onRequestClose={() => setAddFormVisible(false)}>
@@ -1162,6 +1108,16 @@ const styles = StyleSheet.create({
   mapTitleBadge: { flexDirection: "row-reverse", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.93)", borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 },
   mapBadge: { backgroundColor: "rgba(255,255,255,0.9)", color: COLORS.green, fontSize: 10, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 },
   mapProvider: { color: "#6A8A8F", fontSize: 9, fontWeight: "700" },
+  mapRoad: { position: "absolute", height: 2, backgroundColor: "rgba(255,255,255,0.95)", transform: [{ rotate: "28deg" }] },
+  roadOne: { width: "120%", top: 90, left: -20 },
+  roadTwo: { width: "115%", top: 145, left: 20, transform: [{ rotate: "-34deg" }] },
+  roadThree: { width: "85%", top: 64, left: 88, transform: [{ rotate: "80deg" }] },
+  mapWater: { position: "absolute", width: 145, height: 38, borderRadius: 50, backgroundColor: "rgba(131, 202, 207, 0.42)", bottom: 20, left: -20, transform: [{ rotate: "-18deg" }] },
+  mapPin: { position: "absolute", alignItems: "center" },
+  pinNumber: { position: "absolute", top: 3, width: 15, height: 15, borderRadius: 8, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center" },
+  pinNumberText: { color: COLORS.navy, fontSize: 9, fontWeight: "900" },
+  currentLocation: { position: "absolute", top: 84, left: 83, width: 22, height: 22, borderRadius: 12, backgroundColor: "rgba(67, 151, 255, 0.18)", alignItems: "center", justifyContent: "center" },
+  currentDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: "#4A94F5", borderWidth: 2, borderColor: COLORS.white },
   mapControl: { position: "absolute", bottom: 10, left: 10, width: 34, height: 34, borderRadius: 10, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center" },
   mapLegend: { position: "absolute", right: 10, bottom: 10, flexDirection: "row-reverse", alignItems: "center", gap: 8, backgroundColor: "rgba(255,255,255,0.93)", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 7 },
   legendItem: { flexDirection: "row-reverse", alignItems: "center", gap: 4 },
@@ -1185,8 +1141,6 @@ const styles = StyleSheet.create({
   placeInfo: { flex: 1 },
   nameRow: { flexDirection: "row-reverse", alignItems: "center", gap: 7, marginBottom: 6 },
   placeName: { color: COLORS.ink, fontSize: 15, fontWeight: "900", textAlign: "right", flexShrink: 1 },
-  officialPlacePill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3, backgroundColor: "#EFF8F7" },
-  officialPlaceText: { color: COLORS.teal, fontSize: 9, fontWeight: "900" },
   typePill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3 },
   typePillMosque: { backgroundColor: "#E5F7F0" },
   typePillMusalla: { backgroundColor: COLORS.musallaSoft },
@@ -1257,15 +1211,34 @@ const styles = StyleSheet.create({
   exploreCardAction: { color: COLORS.navy, fontSize: 10, fontWeight: "900", marginTop: "auto", textAlign: "right" },
   exploreLocationNote: { flexDirection: "row-reverse", alignItems: "center", gap: 7, backgroundColor: COLORS.goldSoft, borderRadius: 12, padding: 10, marginBottom: 16 },
   exploreLocationText: { flex: 1, color: COLORS.navy, fontSize: 10, fontWeight: "700", textAlign: "right", lineHeight: 16 },
-  officialDirectoryButton: { flexDirection: "row-reverse", alignItems: "center", gap: 10, backgroundColor: "#F0F7F7", borderColor: "#DCEBEA", borderWidth: 1, borderRadius: 16, padding: 12, marginBottom: 14 },
-  officialDirectoryIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center" },
-  officialDirectoryCopy: { flex: 1, alignItems: "flex-end" },
-  officialDirectoryTitle: { color: COLORS.navy, fontSize: 12, fontWeight: "900", textAlign: "right" },
-  officialDirectoryHint: { color: COLORS.muted, fontSize: 10, marginTop: 3, textAlign: "right" },
   exploreQuickTitle: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginBottom: 5 },
   exploreQuickGrid: { borderTopWidth: 1, borderTopColor: COLORS.line },
   exploreQuickItem: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.line },
   exploreQuickText: { color: COLORS.ink, fontSize: 12, fontWeight: "800", flex: 1, textAlign: "right" },
+  qiblaHeroHint: { color: COLORS.teal, fontSize: 13, fontWeight: "800", textAlign: "center", marginBottom: 3 },
+  qiblaSmartBadge: { alignSelf: "center", flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: "#E5F7F0", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 7 },
+  qiblaSmartText: { color: COLORS.green, fontSize: 11, fontWeight: "900" },
+  qiblaAutoNote: { flexDirection: "row-reverse", alignItems: "flex-start", gap: 7, backgroundColor: "#F0F7F7", borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: "#DCEBEA" },
+  qiblaAutoNoteText: { flex: 1, color: COLORS.navy, fontSize: 11, lineHeight: 18, fontWeight: "700", textAlign: "right" },
+  qiblaCompass: { alignItems: "center", justifyContent: "center", height: 220, marginVertical: 2, position: "relative" },
+  qiblaGlow: { position: "absolute", width: 205, height: 205, borderRadius: 103, backgroundColor: "#EAF7F5" },
+  qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
+  qiblaRing: { width: 188, height: 188, borderRadius: 94, borderWidth: 7, borderColor: "#C9E3E0", backgroundColor: "#F8FCFC", alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
+  qiblaNorth: { position: "absolute", top: 10, color: COLORS.navy, fontWeight: "900", fontSize: 12 },
+  qiblaEast: { position: "absolute", right: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
+  qiblaSouth: { position: "absolute", bottom: 10, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
+  qiblaWest: { position: "absolute", left: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
+  qiblaNeedle: { alignItems: "center", justifyContent: "center", width: 86, height: 86 },
+  kaabaBadge: { position: "absolute", top: 6, width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: COLORS.gold },
+  qiblaCenter: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: COLORS.navy, borderWidth: 3, borderColor: COLORS.white },
+  qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
+  qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
+  qiblaStatLabel: { color: COLORS.muted, fontSize: 10, textAlign: "center", marginTop: 2 },
+  compassStatus: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, marginBottom: 4 },
+  compassStatusDot: { width: 8, height: 8, borderRadius: 4 },
+  compassStatusReady: { backgroundColor: COLORS.green },
+  compassStatusWaiting: { backgroundColor: COLORS.gold },
+  compassStatusText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   primaryModalButton: { height: 50, borderRadius: 14, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
   primaryModalText: { color: COLORS.white, fontSize: 15, fontWeight: "800", writingDirection: "rtl" },
   calibrationHint: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "center", marginBottom: 3 },
