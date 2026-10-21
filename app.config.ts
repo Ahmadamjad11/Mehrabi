@@ -55,7 +55,9 @@ const publicRuntime = {
     process.env.VITE_APP_ID ??
     process.env.EXPO_PUBLIC_APP_ID ??
     "",
-  apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
+  apiBaseUrl:
+    process.env.EXPO_PUBLIC_API_BASE_URL ||
+    "https://mehrabi-dvz6x8x.manus.space",
 };
 
 const config: ExpoConfig & { logoUrl: string } = {
