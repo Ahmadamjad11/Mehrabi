@@ -48,7 +48,7 @@ const publicRuntime = {
     "",
   apiBaseUrl:
     process.env.EXPO_PUBLIC_API_BASE_URL ??
-    "https://wenausalli-budydcoo.manus.space",
+    "https://mehrabi-dvz6xk8x.manus.space",
 };
 
 const config: ExpoConfig & { logoUrl: string } = {
