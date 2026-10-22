@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, inArray, isNull, like, lt, lte, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash } from "node:crypto";
 import {
@@ -307,6 +307,29 @@ export async function listPublicPlaces() {
   return db.select().from(places).where(eq(places.status, "approved"));
 }
 
+export async function listPublicMapPoints() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: places.id,
+      name: places.name,
+      type: places.type,
+      latitude: places.latitude,
+      longitude: places.longitude,
+    })
+    .from(places)
+    .where(and(
+      eq(places.status, "approved"),
+      isNull(places.sourceKey),
+      gte(places.latitude, -90),
+      lte(places.latitude, 90),
+      gte(places.longitude, -180),
+      lte(places.longitude, 180),
+    ))
+    .orderBy(places.id);
+}
+
 export async function getPlaceById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
@@ -417,6 +440,40 @@ export async function listOfficialMosques(input: {
     db.select({ total: count() }).from(officialMosques).where(where),
   ]);
   return { items, total: Number(totalRows[0]?.total ?? 0) };
+}
+
+export async function listOfficialMosqueMapPoints() {
+  const db = await getDb();
+  if (!db) return { items: [], totalDisplayable: 0 };
+
+  const [rows, totalRows] = await Promise.all([
+    db
+      .select({
+        id: officialMosques.id,
+        name: officialMosques.name,
+        latitude: officialMosques.latitude,
+        longitude: officialMosques.longitude,
+      })
+      .from(officialMosques)
+      .where(and(
+        eq(officialMosques.displayable, true),
+        isNotNull(officialMosques.latitude),
+        isNotNull(officialMosques.longitude),
+      ))
+      .orderBy(officialMosques.governorate, officialMosques.directorate, officialMosques.name, officialMosques.id),
+    db.select({ total: count() }).from(officialMosques).where(eq(officialMosques.displayable, true)),
+  ]);
+
+  const items = rows.flatMap((row) => {
+    const latitude = Number(row.latitude);
+    const longitude = Number(row.longitude);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      return [];
+    }
+    return [{ id: row.id, name: row.name, latitude, longitude }];
+  });
+
+  return { items, totalDisplayable: Number(totalRows[0]?.total ?? 0) };
 }
 
 export async function createOAuthStateNonce(

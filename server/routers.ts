@@ -12,7 +12,9 @@ import {
   getPlaceById,
   listAllPlaces,
   listOfficialMosques,
+  listOfficialMosqueMapPoints,
   listPlaces,
+  listPublicMapPoints,
   listPublicPlaces,
   listReviews,
   restorePlace,
@@ -138,6 +140,7 @@ export const appRouter = router({
         const limit = input?.limit ?? 20;
         return filtered.slice(offset, offset + limit);
       }),
+    mapPoints: publicProcedure.query(() => listPublicMapPoints()),
     nearest: publicProcedure.input(nearestInput).mutation(async ({ input }) => {
       const rows = filterPublicPlaces(await listPublicPlaces(), input);
       return rows
@@ -193,6 +196,7 @@ export const appRouter = router({
         }).optional(),
       )
       .query(({ input }) => listOfficialMosques(input ?? { limit: 25, offset: 0 })),
+    mapPoints: publicProcedure.query(() => listOfficialMosqueMapPoints()),
   }),
   admin: router({
     pendingPlaces: adminProcedure.query(() => listPlaces("pending")),
