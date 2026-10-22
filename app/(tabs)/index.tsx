@@ -734,6 +734,16 @@ export default function HomeScreen() {
     ? nearestPlaces.data?.length === 20
     : placesQuery.data?.length === 20;
 
+  const openOfficialMosqueDirectory = () => {
+    const navigate = () => router.push({ pathname: "/mosques", params: { language } } as never);
+    if (activeTab !== "home") {
+      setActiveTab("home");
+      setTimeout(navigate, 320);
+      return;
+    }
+    navigate();
+  };
+
   const openAddPlace = () => {
     if (!meQuery.data) {
       openEmailAuth("login");
@@ -841,6 +851,14 @@ export default function HomeScreen() {
               return <Pressable key={option.key} onPress={() => setPlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
+          <Pressable style={styles.officialDirectoryButton} onPress={openOfficialMosqueDirectory} accessibilityRole="button">
+            <View style={styles.officialDirectoryIcon}><MaterialCommunityIcons name="mosque" size={20} color={COLORS.green} /></View>
+            <View style={styles.officialDirectoryCopy}>
+              <Text style={styles.officialDirectoryTitle}>{language === "ar" ? "دليل الجوامع الرسمي" : "Official mosque directory"}</Text>
+              <Text style={styles.officialDirectoryHint}>{language === "ar" ? "ابحث وتصفّح جميع الجوامع المتاحة" : "Search and browse all available mosques"}</Text>
+            </View>
+            <Ionicons name="chevron-back" size={18} color={COLORS.green} />
+          </Pressable>
           <Pressable style={styles.filterButton} onPress={() => setActiveTab("explore")}><Ionicons name="options-outline" size={16} color={COLORS.navy} /><Text style={styles.filterButtonText}>{language === "ar" ? "تصفية وترتيب" : "Filter & sort"}</Text><Text style={styles.filterButtonValue}>{activeFilter === "nearest" ? ui.nearest : filterOptions.find((item) => item.key === activeFilter)?.label}</Text></Pressable>
         </View>
 
@@ -893,6 +911,14 @@ export default function HomeScreen() {
                 <Pressable style={[styles.exploreTypeCard, styles.exploreMusallaCard]} onPress={() => { setPlaceTypeFilter("musalla"); setActiveFilter("nearest"); setActiveTab("home"); }}><View style={[styles.exploreCardIcon, styles.exploreCardIconBlue]}><MaterialCommunityIcons name="home-city-outline" size={23} color={COLORS.musallaBlue} /></View><Text style={styles.exploreCardTitle}>{ui.musallas}</Text><Text style={styles.exploreCardCount}>{musallas.length} {language === "ar" ? "قريب" : "nearby"}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "عرض المصليات ←" : "View musallas →"}</Text></Pressable>
               </View>
               <View style={styles.exploreLocationNote}><Ionicons name={locationEnabled ? "checkmark-circle" : "location-outline"} size={17} color={locationEnabled ? COLORS.green : COLORS.gold} /><Text style={styles.exploreLocationText}>{locationEnabled ? (language === "ar" ? "نعرض لك الأماكن الأقرب حسب موقعك الحالي." : "Showing places nearest to your current location.") : (language === "ar" ? "فعّل موقعك لنقترح الأماكن الأقرب لك." : "Enable your location for the nearest places.")}</Text></View>
+              <Pressable style={styles.exploreDirectoryCta} onPress={openOfficialMosqueDirectory} accessibilityRole="button">
+                <View style={styles.exploreDirectoryIcon}><MaterialCommunityIcons name="mosque" size={20} color={COLORS.green} /></View>
+                <View style={styles.exploreDirectoryCopy}>
+                  <Text style={styles.exploreDirectoryTitle}>{language === "ar" ? "دليل الجوامع الكامل" : "Full mosque directory"}</Text>
+                  <Text style={styles.exploreDirectoryHint}>{language === "ar" ? "المساجد المسجلة رسميًا في كل المناطق" : "Officially listed mosques across all areas"}</Text>
+                </View>
+                <Ionicons name="chevron-back" size={18} color={COLORS.green} />
+              </Pressable>
               <Text style={styles.exploreQuickTitle}>{language === "ar" ? "اختصارات ذكية" : "Smart shortcuts"}</Text>
               <View style={styles.exploreQuickGrid}>{filterOptions.filter((filter) => filter.key !== "nearest").map((filter) => <Pressable key={filter.key} style={styles.exploreQuickItem} onPress={() => { setPlaceTypeFilter("all"); setActiveFilter(filter.key); setActiveTab("home"); }}><Ionicons name={filter.key === "open" ? "time-outline" : filter.key === "ablution" ? "water-outline" : filter.key === "women" ? "people-outline" : "heart-outline"} size={17} color={COLORS.teal} /><Text style={styles.exploreQuickText}>{filter.label}</Text><Ionicons name="chevron-back" size={15} color={COLORS.muted} /></Pressable>)}</View>
             </>}
@@ -1096,6 +1122,11 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, color: COLORS.ink, fontSize: 13, paddingVertical: 0 },
   shortcut: { backgroundColor: COLORS.canvas, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 },
   shortcutText: { color: COLORS.muted, fontSize: 10 },
+  officialDirectoryButton: { minHeight: 62, flexDirection: "row-reverse", alignItems: "center", gap: 10, marginTop: 11, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 16, backgroundColor: "#F2FCF8", borderWidth: 1, borderColor: "#D7EEE4" },
+  officialDirectoryIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center" },
+  officialDirectoryCopy: { flex: 1, alignItems: "flex-end" },
+  officialDirectoryTitle: { color: COLORS.navy, fontSize: 12, fontWeight: "900", textAlign: "right" },
+  officialDirectoryHint: { color: COLORS.muted, fontSize: 10, marginTop: 3, textAlign: "right" },
   filters: { flexDirection: "row-reverse", gap: 7, paddingVertical: 12 },
   filterChip: { flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.line, borderRadius: 999, paddingHorizontal: 12, height: 35 },
   filterChipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
@@ -1211,6 +1242,11 @@ const styles = StyleSheet.create({
   exploreCardAction: { color: COLORS.navy, fontSize: 10, fontWeight: "900", marginTop: "auto", textAlign: "right" },
   exploreLocationNote: { flexDirection: "row-reverse", alignItems: "center", gap: 7, backgroundColor: COLORS.goldSoft, borderRadius: 12, padding: 10, marginBottom: 16 },
   exploreLocationText: { flex: 1, color: COLORS.navy, fontSize: 10, fontWeight: "700", textAlign: "right", lineHeight: 16 },
+  exploreDirectoryCta: { minHeight: 62, flexDirection: "row-reverse", alignItems: "center", gap: 10, paddingHorizontal: 11, paddingVertical: 9, borderRadius: 15, backgroundColor: "#F2FCF8", borderWidth: 1, borderColor: "#D7EEE4", marginBottom: 14 },
+  exploreDirectoryIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center" },
+  exploreDirectoryCopy: { flex: 1, alignItems: "flex-end" },
+  exploreDirectoryTitle: { color: COLORS.navy, fontSize: 12, fontWeight: "900", textAlign: "right" },
+  exploreDirectoryHint: { color: COLORS.muted, fontSize: 10, marginTop: 3, textAlign: "right" },
   exploreQuickTitle: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginBottom: 5 },
   exploreQuickGrid: { borderTopWidth: 1, borderTopColor: COLORS.line },
   exploreQuickItem: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.line },
