@@ -411,7 +411,7 @@ export async function listOfficialMosques(input: {
       .select()
       .from(officialMosques)
       .where(where)
-      .orderBy(officialMosques.governorate, officialMosques.directorate, officialMosques.name)
+      .orderBy(officialMosques.governorate, officialMosques.directorate, officialMosques.name, officialMosques.id)
       .limit(input.limit)
       .offset(input.offset),
     db.select({ total: count() }).from(officialMosques).where(where),
