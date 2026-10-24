@@ -8,7 +8,7 @@ export default function OsmMapFrame({ html }: OsmMapFrameProps) {
   return createElement("iframe", {
     title: "OpenStreetMap prayer places",
     srcDoc: html,
-    sandbox: "allow-scripts",
+    sandbox: "allow-scripts allow-popups allow-popups-to-escape-sandbox",
     style: {
       position: "absolute",
       top: 0,

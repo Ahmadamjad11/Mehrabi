@@ -1,4 +1,4 @@
-import { StyleSheet } from "react-native";
+import { Linking, StyleSheet } from "react-native";
 import { WebView } from "react-native-webview";
 
 type OsmMapFrameProps = {
@@ -12,6 +12,16 @@ export default function OsmMapFrame({ html }: OsmMapFrameProps) {
       style={StyleSheet.absoluteFill}
       originWhitelist={["*"]}
       javaScriptEnabled
+      onMessage={(event) => {
+        try {
+          const message = JSON.parse(event.nativeEvent.data) as { type?: string; url?: string };
+          if (message.type !== "open-osm-link" || typeof message.url !== "string") return;
+          if (!/^https:\/\/www\.openstreetmap\.org\/(node|way|relation)\/\d+$/.test(message.url)) return;
+          void Linking.openURL(message.url).catch(() => undefined);
+        } catch {
+          // Ignore messages that are not OSM source links.
+        }
+      }}
     />
   );
 }
