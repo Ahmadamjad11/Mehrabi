@@ -6,13 +6,16 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6x8x.manus.space"
+        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6xk8x.manus.space"
       },
       "android": {
         "buildType": "apk"
       }
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6xk8x.manus.space"
+      },
       "android": {
         "buildType": "app-bundle"
       }
