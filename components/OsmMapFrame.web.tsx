@@ -5,10 +5,12 @@ type OsmMapFrameProps = {
 };
 
 export default function OsmMapFrame({ html }: OsmMapFrameProps) {
+  // Generated map data is escaped in the HTML; same-origin is needed for OSM's Referer policy, and Leaflet is SRI-pinned.
   return createElement("iframe", {
     title: "OpenStreetMap prayer places",
     srcDoc: html,
-    sandbox: "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    sandbox: "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox",
+    referrerPolicy: "strict-origin",
     style: {
       position: "absolute",
       top: 0,

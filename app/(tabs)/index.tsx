@@ -29,6 +29,7 @@ import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
 import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { buildMapLocationCandidates, rankMapLocationsByDistance } from "@/lib/mapLocations";
 
 const COLORS = {
   navy: "#102D4A",
@@ -55,6 +56,11 @@ type Place = {
   distance: string;
   drive: string;
   distanceMeters: number;
+  source: "community" | "ministry" | "osm";
+  sourceLabelAr: string;
+  sourceLabelEn: string;
+  osmUrl?: string;
+  alternateNames?: string[];
   open: boolean | null;
   ablution: boolean;
   parking: boolean;
@@ -251,11 +257,6 @@ type OsmMapFeature = {
 };
 
 const OSM_MAP_FEATURES = osmMosqueMapData.features as OsmMapFeature[];
-const OSM_OFFICIAL_MATCHES_TO_FILL = OSM_MAP_FEATURES.filter(
-  (feature) => feature.officialMatch && !feature.officialMatch.officialHasCoordinates,
-).length;
-const OSM_UNLINKED_FEATURES = OSM_MAP_FEATURES.filter((feature) => !feature.officialMatch).length;
-const OSM_FEATURES_WITH_OFFICIAL_COORDINATES = OSM_MAP_FEATURES.filter((feature) => feature.officialMatch?.officialHasCoordinates).length;
 const OSM_COPYRIGHT_URL = "https://www.openstreetmap.org/copyright";
 
 const safeInlineJson = (value: unknown) =>
@@ -270,6 +271,9 @@ const createOsmHtml = (
   userLocation: { lat: number; lng: number } | null,
   language: "ar" | "en",
   officialMosquesLoaded: boolean,
+  placeTypeFilter: "all" | "mosque" | "musalla",
+  searchQuery: string,
+  mapFocusLocation: { lat: number; lng: number } | null,
 ) => {
   const communityPoints = safeInlineJson(places.map(({ latitude, longitude, name, type }) => [latitude, longitude, name, type]));
   const officialPoints = safeInlineJson(officialMosques.map(({ id, name, latitude, longitude }) => ({ id, name, latitude, longitude })));
@@ -279,32 +283,45 @@ const createOsmHtml = (
     osmUrl: feature.osmUrl,
     kind: feature.kind,
     osmName: feature.osmName,
+    alternateNames: feature.alternateNames,
     latitude: feature.latitude,
     longitude: feature.longitude,
     officialMatch: feature.officialMatch,
   })));
   const currentLocation = safeInlineJson(userLocation);
+  const mapViewCenter = safeInlineJson(mapFocusLocation ?? userLocation);
 
   return `<!doctype html>
 <html lang="${language}">
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <meta name="referrer" content="strict-origin" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
     <style>html,body,#map{width:100%;height:100%;margin:0;background:#e3efef}.leaflet-control-attribution{font-size:8px}.leaflet-popup-content{line-height:1.45}.leaflet-popup-content a{display:block;margin-top:4px}</style>
   </head>
   <body>
     <div id="map"></div>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
     <script>
-      const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([31.9539, 35.9106], 7);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' }).addTo(map);
+      const mapViewCenter = ${mapViewCenter};
+      const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView(mapViewCenter ? [Number(mapViewCenter.lat), Number(mapViewCenter.lng)] : [31.9539, 35.9106], ${mapFocusLocation ? 14 : userLocation ? 13 : 9});
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' }).addTo(map);
       const communityPoints = ${communityPoints};
       const officialMosques = ${officialPoints};
       const osmFeatures = ${osmPoints};
       const userLocation = ${currentLocation};
       const officialMosquesLoaded = ${officialMosquesLoaded ? "true" : "false"};
+      const mapTypeFilter = ${safeInlineJson(placeTypeFilter)};
+      const mapSearchQuery = ${safeInlineJson(searchQuery.trim().toLocaleLowerCase())};
       const markerRenderer = L.canvas({ padding: 0.5 });
-      const visibleCoordinates = [];
+
+      function shouldShowMarker(name, isMosque, alternateNames = []) {
+        if (mapTypeFilter === 'mosque' && !isMosque) return false;
+        if (mapTypeFilter === 'musalla' && isMosque) return false;
+        if (!mapSearchQuery) return true;
+        const searchableName = [name, ...alternateNames].filter(Boolean).join(' ').toLocaleLowerCase();
+        return searchableName.includes(mapSearchQuery);
+      }
 
       function isValidOsmUrl(value) {
         const prefix = 'https://www.openstreetmap.org/';
@@ -351,7 +368,6 @@ const createOsmHtml = (
         const longitude = Number(lng);
         if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return;
         const position = [latitude, longitude];
-        visibleCoordinates.push(position);
         L.circleMarker(position, { renderer: markerRenderer, radius, color: '#fff', weight: 1.25, fillColor: color, fillOpacity: 0.92 })
           .addTo(map)
           .bindPopup(popupContent(name, category, source, osmUrl));
@@ -359,12 +375,14 @@ const createOsmHtml = (
 
       communityPoints.forEach(([lat, lng, name, type]) => {
         const isMosque = type === 'مسجد' || type === 'mosque';
+        if (!shouldShowMarker(name, isMosque)) return;
         const category = isMosque ? ("${language}" === 'ar' ? 'مسجد' : 'Mosque') : ("${language}" === 'ar' ? 'مصلى' : 'Musalla');
         const source = "${language}" === 'ar' ? 'مكان معتمد في التطبيق' : 'Approved place in the app';
         addMarker(lat, lng, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, null, 5.5);
       });
 
       officialMosques.forEach(({ name, latitude, longitude }) => {
+        if (!shouldShowMarker(name, true)) return;
         addMarker(latitude, longitude, '#2B9A76', name, "${language}" === 'ar' ? 'جامع رسمي' : 'Official mosque', "${language}" === 'ar' ? 'إحداثيات سجل وزارة الأوقاف' : 'Ministry registry coordinates', null, 6);
       });
 
@@ -377,6 +395,7 @@ const createOsmHtml = (
           ? ("${language}" === 'ar' ? 'مسجد غير مسمّى من OSM' : 'Unnamed mosque from OSM')
           : ("${language}" === 'ar' ? 'مصلى غير مسمّى من OSM' : 'Unnamed musalla from OSM');
         const name = officialMatch?.officialName || feature.osmName || fallbackName;
+        if (!shouldShowMarker(name, isMosque, [feature.osmName, ...(feature.alternateNames || []), officialMatch?.officialName])) return;
         const category = matchedMissingCoordinates
           ? ("${language}" === 'ar' ? 'جامع رسمي — موقعه من OSM' : 'Official mosque — location from OSM')
           : (isMosque ? ("${language}" === 'ar' ? 'جامع من OpenStreetMap' : 'Mosque from OpenStreetMap') : ("${language}" === 'ar' ? 'مصلى من OpenStreetMap' : 'Musalla from OpenStreetMap'));
@@ -387,19 +406,16 @@ const createOsmHtml = (
       });
 
       if (userLocation) {
-        const latitude = Number(userLocation.lat);
-        const longitude = Number(userLocation.lng);
-        if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-          const position = [latitude, longitude];
-          visibleCoordinates.push(position);
-          L.circleMarker(position, { renderer: markerRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#4A94F5', fillOpacity: 0.92 })
+          const latitude = Number(userLocation.lat);
+          const longitude = Number(userLocation.lng);
+          if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+            const position = [latitude, longitude];
+            L.circleMarker(position, { renderer: markerRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#4A94F5', fillOpacity: 0.92 })
             .addTo(map)
             .bindPopup("${language}" === 'ar' ? 'موقعك الحالي' : 'Your location');
         }
       }
 
-      if (visibleCoordinates.length === 1) map.setView(visibleCoordinates[0], 13);
-      else if (visibleCoordinates.length > 1) map.fitBounds(L.latLngBounds(visibleCoordinates), { padding: [18, 18], maxZoom: 13 });
       setTimeout(() => map.invalidateSize(), 80);
     </script>
   </body>
@@ -419,6 +435,7 @@ export default function HomeScreen() {
   const [favorites, setFavorites] = useState<string[]>([]);
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [mapFocusLocation, setMapFocusLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [language, setLanguage] = useState<"ar" | "en">("ar");
   const [now, setNow] = useState(() => new Date());
   const [compassHeading, setCompassHeading] = useState(0);
@@ -473,13 +490,6 @@ export default function HomeScreen() {
     nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
     go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", logout: "Sign out", emailLogin: "Sign in", emailRegister: "Create account", email: "Email", phone: "Phone number", identifier: "Email or phone number", password: "Password", name: "Full name", forgotPassword: "Forgot password?", sendReset: "Send reset link", resendVerification: "Resend code", createAccount: "Create account", haveAccount: "Already have an account? Sign in", backToLogin: "Back to sign in", verifyHint: "Check your inbox and enter the 6-digit code before signing in.", resetSent: "If this email is registered, you will receive a reset link shortly.", verifySent: "Account created. Check your inbox and enter the code.", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
   };
-  const filterOptions = [
-    { key: "nearest", label: ui.nearest },
-    { key: "open", label: ui.open },
-    { key: "ablution", label: ui.ablution },
-    { key: "women", label: ui.women },
-    { key: "favorites", label: language === "ar" ? "المفضلة" : "Favorites" },
-  ];
   const serverPlaceFilters = {
     search: query.trim() || undefined,
     openNow: activeFilter === "open" ? true : undefined,
@@ -494,29 +504,59 @@ export default function HomeScreen() {
   const publicMapPlacesQuery = trpc.places.mapPoints.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2 });
   const publicMapPlaces = publicMapPlacesQuery.data ?? EMPTY_COMMUNITY_MAP_POINTS;
   const officialMosqueMapPoints = officialMosquesMapQuery.data?.items ?? EMPTY_OFFICIAL_MAP_POINTS;
-  const officialMosqueTotal = officialMosquesMapQuery.data?.totalDisplayable ?? 0;
-  const officialLocatedCount = Math.min(officialMosqueTotal, officialMosqueMapPoints.length + OSM_OFFICIAL_MATCHES_TO_FILL);
-  const officialMosquesWithoutCoordinates = Math.max(0, officialMosqueTotal - officialLocatedCount);
-  const displayedOsmFeatureCount = officialMosquesMapQuery.isSuccess
-    ? OSM_MAP_FEATURES.length - OSM_FEATURES_WITH_OFFICIAL_COORDINATES
-    : OSM_MAP_FEATURES.length;
-  const displayedMapMarkerCount = publicMapPlaces.length
-    + displayedOsmFeatureCount
-    + (officialMosquesMapQuery.isSuccess ? officialMosqueMapPoints.length : 0);
-  const officialCoverageDescription = officialMosquesMapQuery.isSuccess
-    ? language === "ar"
-      ? `${officialLocatedCount} سجل وزارة محدد الموقع (${officialMosqueMapPoints.length} بإحداثيات الوزارة + ${OSM_OFFICIAL_MATCHES_TO_FILL} مواقع OSM)`
-      : `${officialLocatedCount} Ministry records located (${officialMosqueMapPoints.length} registry coordinates + ${OSM_OFFICIAL_MATCHES_TO_FILL} OSM locations)`
-    : officialMosquesMapQuery.isLoading
-      ? language === "ar"
-        ? `${OSM_OFFICIAL_MATCHES_TO_FILL} سجلًا رسميًا له موقع OSM؛ جارٍ تحميل الإحداثيات الرسمية`
-        : `${OSM_OFFICIAL_MATCHES_TO_FILL} Ministry records have OSM locations; loading registry coordinates`
-      : language === "ar"
-        ? `${OSM_OFFICIAL_MATCHES_TO_FILL} سجلًا رسميًا له موقع OSM؛ تعذّر تحميل الإحداثيات الرسمية`
-        : `${OSM_OFFICIAL_MATCHES_TO_FILL} Ministry records have OSM locations; registry coordinates could not load`;
+  const mapLocationCandidates = useMemo(() => {
+    const communityDetails = new Map(loadedApiPlaces.map((place) => [String(place.id), place]));
+    const community = publicMapPlaces.map((point) => {
+      const details = communityDetails.get(String(point.id));
+      const hours = String(details?.hours ?? "");
+      const open = !hours || /غير معروفة|unknown/i.test(hours) ? null : /مفتوح طوال اليوم|open all day|24\/7/i.test(hours) ? true : /مغلق|closed/i.test(hours) ? false : null;
+      return {
+        ...point,
+        open,
+        hasAblution: Boolean(details?.hasAblution),
+        hasWomenPrayer: Boolean(details?.hasWomenPrayer),
+        hasParking: Boolean(details?.hasParking),
+        status: details?.status,
+      };
+    });
+    return buildMapLocationCandidates({
+      community,
+      official: officialMosqueMapPoints,
+      osm: OSM_MAP_FEATURES,
+      officialMapLoaded: officialMosquesMapQuery.isSuccess,
+    });
+  }, [publicMapPlaces, officialMosqueMapPoints, officialMosquesMapQuery.isSuccess, loadedApiPlaces]);
+  const sourcePlaces: Place[] = useMemo(() => {
+    const ranked = userLocation
+      ? rankMapLocationsByDistance(mapLocationCandidates, userLocation)
+      : mapLocationCandidates.map((location) => ({ ...location, distanceMeters: Number.MAX_SAFE_INTEGER }));
+    return ranked.map((location) => ({
+      id: location.id,
+      name: location.name,
+      type: location.kind === "mosque" ? "مسجد" : "مصلى",
+      distance: formatDistance(userLocation, { lat: location.latitude, lng: location.longitude }),
+      drive: "—",
+      distanceMeters: location.distanceMeters,
+      source: location.source,
+      sourceLabelAr: location.sourceLabelAr,
+      sourceLabelEn: location.sourceLabelEn,
+      osmUrl: location.osmUrl,
+      alternateNames: location.alternateNames,
+      open: location.open ?? null,
+      ablution: location.hasAblution ?? false,
+      parking: location.hasParking ?? false,
+      women: location.hasWomenPrayer ?? false,
+      lat: location.latitude,
+      lng: location.longitude,
+      status: location.status,
+    }));
+  }, [mapLocationCandidates, userLocation]);
+  const nearestMosque = userLocation
+    ? sourcePlaces.find((place) => place.type === "مسجد" && (!query.trim() || [place.name, ...(place.alternateNames ?? [])].some((name) => name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())))) ?? null
+    : null;
   const mapHtml = useMemo(
-    () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess),
-    [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess],
+    () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation),
+    [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation],
   );
   const meQuery = trpc.auth.me.useQuery();
   const logoutMutation = trpc.auth.logout.useMutation();
@@ -772,26 +812,10 @@ export default function HomeScreen() {
   const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
   const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
 
-  const apiPlaces: Place[] = loadedApiPlaces.map((place) => ({
-    id: String(place.id),
-    name: place.name,
-    type: place.type === "mosque" ? "مسجد" : place.type === "mall" ? "مصلى مول" : place.type === "station" ? "مصلى محطة" : "مصلى",
-    distance: formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }),
-    drive: "—",
-    open: !place.hours || /غير معروفة|unknown/i.test(place.hours) ? null : /مفتوح طوال اليوم|open all day|24\/7/i.test(place.hours) ? true : /مغلق|closed/i.test(place.hours) ? false : null,
-    ablution: place.hasAblution,
-    women: place.hasWomenPrayer,
-    parking: place.hasParking,
-    lat: place.latitude,
-    lng: place.longitude,
-    status: place.status,
-    distanceMeters: userLocation ? Math.round(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).includes("كم") ? Number(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).replace(" كم", "")) * 1000 : Number(formatDistance(userLocation, { lat: place.latitude, lng: place.longitude }).replace(" م", ""))) : Number.MAX_SAFE_INTEGER,
-  }));
-  const sourcePlaces = apiPlaces;
-
   const filteredPlaces = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
     let result = sourcePlaces.filter((place) =>
-      place.name.toLowerCase().includes(query.trim().toLowerCase()),
+      [place.name, ...(place.alternateNames ?? [])].some((name) => name.toLocaleLowerCase().includes(normalizedQuery)),
     );
     if (activeFilter === "open") result = result.filter((place) => place.open === true);
     if (activeFilter === "ablution") result = result.filter((place) => place.ablution);
@@ -802,8 +826,7 @@ export default function HomeScreen() {
     return result.sort((a, b) => a.distanceMeters - b.distanceMeters);
   }, [activeFilter, favorites, placeTypeFilter, query, sourcePlaces]);
 
-  const mosques = filteredPlaces.filter((place) => place.type === "مسجد");
-  const musallas = filteredPlaces.filter((place) => place.type !== "مسجد");
+  const nearestFivePlaces = filteredPlaces.slice(0, 5);
 
   const openMaps = (place: Place) => {
     const url = `https://www.google.com/maps/dir/?api=1&destination=${place.lat},${place.lng}`;
@@ -827,6 +850,7 @@ export default function HomeScreen() {
       }
       const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
+      setMapFocusLocation(null);
       setLocationEnabled(true);
       setLocationError(null);
     } catch {
@@ -927,14 +951,6 @@ export default function HomeScreen() {
     }
   };
 
-  const placeGroups: { groupTitle: string; groupPlaces: Place[] }[] = [
-    { groupTitle: ui.mosques ?? "", groupPlaces: mosques },
-    { groupTitle: ui.musallas ?? "", groupPlaces: musallas },
-  ];
-  const canLoadMore = activeFilter === "nearest" && userLocation
-    ? nearestPlaces.data?.length === 20
-    : placesQuery.data?.length === 20;
-
   const openAddPlace = () => {
     if (!meQuery.data) {
       openEmailAuth("login");
@@ -1004,11 +1020,6 @@ export default function HomeScreen() {
             <Text style={styles.quickActionText}>{ui.qibla}</Text>
             <Text style={styles.quickActionHint}>{language === "ar" ? "اتجاه دقيق" : "Accurate bearing"}</Text>
           </Pressable>
-          <Pressable style={styles.quickAction} onPress={() => setActiveTab("explore")}>
-            <View style={[styles.quickIcon, styles.quickIconTeal]}><Ionicons name="compass-outline" size={21} color={COLORS.navy} /></View>
-            <Text style={styles.quickActionText}>{ui.explore}</Text>
-            <Text style={styles.quickActionHint}>{language === "ar" ? "اكتشف حولك" : "Discover nearby"}</Text>
-          </Pressable>
           <Pressable style={styles.quickAction} onPress={openAddPlace}>
             <View style={[styles.quickIcon, styles.quickIconBlue]}><Ionicons name="add" size={22} color={COLORS.navy} /></View>
             <Text style={styles.quickActionText}>{ui.add}</Text>
@@ -1039,62 +1050,74 @@ export default function HomeScreen() {
               return <Pressable key={option.key} onPress={() => setPlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
-          <Pressable style={styles.filterButton} onPress={() => setActiveTab("explore")}><Ionicons name="options-outline" size={16} color={COLORS.navy} /><Text style={styles.filterButtonText}>{language === "ar" ? "تصفية وترتيب" : "Filter & sort"}</Text><Text style={styles.filterButtonValue}>{activeFilter === "nearest" ? ui.nearest : filterOptions.find((item) => item.key === activeFilter)?.label}</Text></Pressable>
         </View>
 
         <View style={styles.mapCard}>
           <OsmMapFrame html={mapHtml} />
           <View style={styles.mapHeader}><View style={styles.mapTitleBadge}><Ionicons name="navigate-outline" size={13} color={COLORS.green} /><Text style={styles.mapBadge}>{ui.mapLocation}</Text></View><Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(OSM_COPYRIGHT_URL).catch(() => undefined); }}><Text style={styles.mapProvider}>© OpenStreetMap contributors</Text></Pressable></View>
-          <Pressable style={styles.mapControl} onPress={requestLocation}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
+          <Pressable style={styles.mapControl} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
           <View style={styles.mapLegend}><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.mosqueGreen }]} /><Text style={styles.legendText}>{ui.mosques}</Text></View><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.musallaBlue }]} /><Text style={styles.legendText}>{ui.musallas}</Text></View>{locationEnabled && <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendLocation]} /><Text style={styles.legendText}>{language === "ar" ? "موقعك" : "You"}</Text></View>}</View>
         </View>
         <View style={styles.mapCoverage}>
-          <Text style={styles.mapCoverageText}>
-            {language === "ar"
-              ? `${displayedMapMarkerCount} علامة مرسومة على الخريطة · ${officialCoverageDescription} · ${OSM_UNLINKED_FEATURES} معلم OSM غير مربوط بسجل الوزارة`
-              : `${displayedMapMarkerCount} markers on the map · ${officialCoverageDescription} · ${OSM_UNLINKED_FEATURES} OSM features not confidently linked to the Ministry`}
-          </Text>
-          <Text style={styles.mapCoverageText}>{language === "ar" ? `OSM: ${OSM_MAP_FEATURES.length} معلمًا (${osmMosqueMapData.metadata.featuresByKind.mosque} جامعًا، ${osmMosqueMapData.metadata.featuresByKind.musalla} مصليات) · ${officialMosquesMapQuery.isSuccess ? `${officialMosquesWithoutCoordinates} سجل رسمي بلا موقع` : "الإحداثيات الرسمية غير متاحة الآن"}` : `OSM: ${OSM_MAP_FEATURES.length} features (${osmMosqueMapData.metadata.featuresByKind.mosque} mosques, ${osmMosqueMapData.metadata.featuresByKind.musalla} musallas) · ${officialMosquesMapQuery.isSuccess ? `${officialMosquesWithoutCoordinates} official records remain unmapped` : "Official coordinates are temporarily unavailable"}`}</Text>
+          <Text style={styles.mapCoverageText}>{language === "ar" ? "الأسماء الرسمية من وزارة الأوقاف؛ والإحداثيات المكمّلة من OpenStreetMap. اضغط العلامة لمعرفة مصدرها." : "Official names come from the Ministry; supplementary coordinates come from OpenStreetMap. Tap a marker to see its source."}</Text>
           {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <Pressable onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable>}
         </View>
 
         {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
-        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? `أماكن مجتمعية معروضة: ${filteredPlaces.length}` : `Community places shown: ${filteredPlaces.length}`}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
-        {filteredPlaces.length === 0 && !placesQuery.isLoading && (
+        {nearestMosque ? (
+          <View style={styles.nearestMosqueCard}>
+            <View style={styles.nearestMosqueCopy}>
+              <Text style={styles.nearestMosqueLabel}>{language === "ar" ? "أقرب مسجد إلى موقعك" : "Nearest mosque to your location"}</Text>
+              <Text style={styles.nearestMosqueName}>{nearestMosque.name}</Text>
+              <Text style={styles.nearestMosqueMeta}>{nearestMosque.distance} {language === "ar" ? "خط مستقيم" : "straight-line distance"} · {language === "ar" ? nearestMosque.sourceLabelAr : nearestMosque.sourceLabelEn}</Text>
+            </View>
+            <Pressable style={styles.nearestMosqueAction} onPress={() => { setPlaceTypeFilter("mosque"); setMapFocusLocation({ lat: nearestMosque.lat, lng: nearestMosque.lng }); }}>
+              <Ionicons name="map-outline" size={17} color={COLORS.white} />
+              <Text style={styles.nearestMosqueActionText}>{language === "ar" ? "اعرضه" : "Show"}</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.nearestMosqueCard}>
+            <View style={styles.nearestMosqueCopy}>
+              <Text style={styles.nearestMosqueLabel}>{language === "ar" ? "أقرب مسجد" : "Nearest mosque"}</Text>
+              <Text style={styles.nearestMosqueName}>{userLocation ? (language === "ar" ? "لا توجد نتيجة مطابقة للبحث الحالي" : "No mosque matches this search") : (language === "ar" ? "حدّد موقعك لحساب الأقرب بدقة" : "Set your location to calculate the nearest mosque")}</Text>
+            </View>
+            {!userLocation && <Pressable style={styles.nearestMosqueAction} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate-outline" size={17} color={COLORS.white} /><Text style={styles.nearestMosqueActionText}>{language === "ar" ? "موقعي" : "Locate"}</Text></Pressable>}
+          </View>
+        )}
+        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
+        {!userLocation && (
           <View style={styles.emptyPlacesNotice}>
             <Text style={styles.emptyPlacesNoticeText}>
               {language === "ar"
-                ? "لا توجد أماكن مجتمعية تطابق البحث والتصفية الحالية. مواقع وزارة الأوقاف وOpenStreetMap تظهر كعلامات على الخريطة أعلاه."
-                : "No community places match the current search and filters. Ministry and OpenStreetMap locations are marked on the map above."}
+                ? "لا أقدّر المسافة من دون موقعك. اسمح بالوصول للموقع أو حرّك الخريطة يدويًا؛ جميع العلامات مبنية على إحداثيات المصدر فقط."
+                : "Distances are not estimated without your location. Allow location access or move the map manually; markers use source coordinates only."}
             </Text>
           </View>
         )}
-        {placeGroups.map(({ groupTitle, groupPlaces }) => groupPlaces.length > 0 && <View key={groupTitle}>
-          <Text style={[styles.groupTitle, groupTitle === ui.mosques ? styles.mosqueTitle : styles.musallaTitle]}>{groupTitle}</Text>
-          {groupPlaces.map((place) => (
+        {userLocation && filteredPlaces.length === 0 && !placesQuery.isLoading && (
+          <View style={styles.emptyPlacesNotice}><Text style={styles.emptyPlacesNoticeText}>{language === "ar" ? "لا توجد مواقع تطابق البحث أو التصفية. جرّب «الكل» أو امسح البحث." : "No map locations match this search or filter. Try All or clear the search."}</Text></View>
+        )}
+        {userLocation && nearestFivePlaces.map((place) => (
           <View key={place.id} style={[styles.placeCard, place.type === "مسجد" ? styles.mosqueCard : styles.musallaCard]}>
             <View style={styles.placeMain}>
               <View style={[styles.placeIcon, place.type === "مسجد" ? styles.mosqueIcon : styles.musallaIcon]}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={place.type === "مسجد" ? COLORS.mosqueGreen : COLORS.musallaBlue} /></View>
               <View style={styles.placeInfo}>
                 <View style={styles.nameRow}><Text style={styles.placeName}>{place.name}</Text><View style={[styles.typePill, place.type === "مسجد" ? styles.typePillMosque : styles.typePillMusalla]}><Text style={styles.typePillText}>{language === "ar" ? place.type : (place.type === "مسجد" ? "Mosque" : "Musalla")}</Text></View></View>
-                <View style={styles.statusRow}>{place.status === "pending" && <View style={styles.unverifiedPill}><Ionicons name="time-outline" size={11} color={COLORS.muted} /><Text style={styles.unverifiedText}>{ui.unverified}</Text></View>}<View style={[styles.openPill, place.open === false && styles.closedPill, place.open === null && styles.unknownPill]}><Text style={[styles.openText, place.open === false && styles.closedText, place.open === null && styles.unknownText]}>{place.open === true ? (language === "ar" ? "مفتوح" : "Open") : place.open === false ? (language === "ar" ? "مغلق" : "Closed") : ui.unknownHours}</Text></View></View>
-                <View style={styles.distanceRow}><Text style={styles.distanceValue}>{place.distance}</Text><Text style={styles.distanceHint}>{language === "ar" ? "على بُعد دقائق منك" : "minutes away"}</Text></View>
-                <View style={styles.amenities}><Text style={styles.metaTime}>{language === "ar" ? "قريب" : "Nearby"}</Text>{place.ablution && <Text style={styles.amenity}><Ionicons name="water" size={13} color={COLORS.teal} /> {language === "ar" ? "وضوء" : "Ablution"}</Text>}{place.parking && <Text style={styles.amenity}><Ionicons name="car" size={13} color={COLORS.muted} /> {language === "ar" ? "موقف" : "Parking"}</Text>}</View>
+                <Text style={styles.placeSourceText}>{language === "ar" ? place.sourceLabelAr : place.sourceLabelEn}</Text>
+                {place.source === "community" && <View style={styles.statusRow}>{place.status === "pending" && <View style={styles.unverifiedPill}><Ionicons name="time-outline" size={11} color={COLORS.muted} /><Text style={styles.unverifiedText}>{ui.unverified}</Text></View>}<View style={[styles.openPill, place.open === false && styles.closedPill, place.open === null && styles.unknownPill]}><Text style={[styles.openText, place.open === false && styles.closedText, place.open === null && styles.unknownText]}>{place.open === true ? (language === "ar" ? "مفتوح" : "Open") : place.open === false ? (language === "ar" ? "مغلق" : "Closed") : ui.unknownHours}</Text></View></View>}
+                <View style={styles.distanceRow}><Text style={styles.distanceValue}>{place.distance}</Text><Text style={styles.distanceHint}>{language === "ar" ? "مسافة بخط مستقيم" : "straight-line distance"}</Text></View>
+                {place.source === "community" && <View style={styles.amenities}><Text style={styles.metaTime}>{language === "ar" ? "معلومات المكان" : "Place details"}</Text>{place.ablution && <Text style={styles.amenity}><Ionicons name="water" size={13} color={COLORS.teal} /> {language === "ar" ? "وضوء" : "Ablution"}</Text>}{place.parking && <Text style={styles.amenity}><Ionicons name="car" size={13} color={COLORS.muted} /> {language === "ar" ? "موقف" : "Parking"}</Text>}</View>}
               </View>
             </View>
             <View style={styles.placeActions}>
-              <Pressable onPress={() => toggleFavorite(place.id)} style={styles.iconAction}><Ionicons name={favorites.includes(place.id) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.id) ? COLORS.red : COLORS.muted} /></Pressable>
-              <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else openEmailAuth("login"); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>
+              {place.source === "community" && <Pressable onPress={() => toggleFavorite(place.id)} style={styles.iconAction}><Ionicons name={favorites.includes(place.id) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.id) ? COLORS.red : COLORS.muted} /></Pressable>}
+              {place.source === "community" && <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else openEmailAuth("login"); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>}
               <Pressable onPress={() => sharePlace(place)} style={styles.iconAction}><Ionicons name="share-social-outline" size={18} color={COLORS.muted} /></Pressable>
               <Pressable onPress={() => openMaps(place)} style={styles.goButton}><Ionicons name="navigate" size={16} color={COLORS.white} /><Text style={styles.goText}>{language === "ar" ? "الطريق" : "Directions"}</Text></Pressable>
             </View>
           </View>
-          ))}
-        </View>)}
-
-        {canLoadMore && <Pressable style={styles.loadMoreButton} onPress={() => setPlaceOffset((current) => current + 20)}><Text style={styles.loadMoreText}>{ui.loadMore}</Text></Pressable>}
-
-        <Pressable style={styles.addPlaceButton} onPress={openAddPlace}><Ionicons name="add" size={19} color={COLORS.navy} /><Text style={styles.addPlaceText}>{ui.add}</Text></Pressable>
+        ))}
         <View style={styles.bottomSpace} />
       </ScrollView>
       <Modal visible={activeTab !== "home"} animationType="slide" transparent onRequestClose={() => setActiveTab("home")}>
@@ -1104,12 +1127,10 @@ export default function HomeScreen() {
             {activeTab === "explore" && <>
               <View style={styles.exploreHero}><View style={styles.exploreHeroIcon}><Ionicons name="compass-outline" size={25} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{language === "ar" ? "اكتشف أماكن الصلاة حولك" : "Discover prayer places nearby"}</Text><Text style={styles.modalHint}>{language === "ar" ? "ابحث عن أقرب مسجد أو مصلى يناسب احتياجك." : "Find the nearest mosque or musalla for your needs."}</Text></View>
               <View style={styles.exploreTypeCards}>
-                <Pressable style={[styles.exploreTypeCard, styles.exploreMosqueCard]} onPress={() => { setPlaceTypeFilter("mosque"); setActiveFilter("nearest"); setActiveTab("home"); }}><View style={styles.exploreCardIcon}><MaterialCommunityIcons name="mosque" size={23} color={COLORS.mosqueGreen} /></View><Text style={styles.exploreCardTitle}>{ui.mosques}</Text><Text style={styles.exploreCardCount}>{mosques.length} {language === "ar" ? "قريب" : "nearby"}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "عرض المساجد ←" : "View mosques →"}</Text></Pressable>
-                <Pressable style={[styles.exploreTypeCard, styles.exploreMusallaCard]} onPress={() => { setPlaceTypeFilter("musalla"); setActiveFilter("nearest"); setActiveTab("home"); }}><View style={[styles.exploreCardIcon, styles.exploreCardIconBlue]}><MaterialCommunityIcons name="home-city-outline" size={23} color={COLORS.musallaBlue} /></View><Text style={styles.exploreCardTitle}>{ui.musallas}</Text><Text style={styles.exploreCardCount}>{musallas.length} {language === "ar" ? "قريب" : "nearby"}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "عرض المصليات ←" : "View musallas →"}</Text></Pressable>
+                <Pressable style={[styles.exploreTypeCard, styles.exploreMosqueCard]} onPress={() => { setPlaceTypeFilter("mosque"); setActiveFilter("nearest"); setMapFocusLocation(null); setActiveTab("home"); }}><View style={styles.exploreCardIcon}><MaterialCommunityIcons name="mosque" size={23} color={COLORS.mosqueGreen} /></View><Text style={styles.exploreCardTitle}>{ui.mosques}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "إظهار على الخريطة ←" : "Show on map →"}</Text></Pressable>
+                <Pressable style={[styles.exploreTypeCard, styles.exploreMusallaCard]} onPress={() => { setPlaceTypeFilter("musalla"); setActiveFilter("nearest"); setMapFocusLocation(null); setActiveTab("home"); }}><View style={[styles.exploreCardIcon, styles.exploreCardIconBlue]}><MaterialCommunityIcons name="home-city-outline" size={23} color={COLORS.musallaBlue} /></View><Text style={styles.exploreCardTitle}>{ui.musallas}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "إظهار على الخريطة ←" : "Show on map →"}</Text></Pressable>
               </View>
-              <View style={styles.exploreLocationNote}><Ionicons name={locationEnabled ? "checkmark-circle" : "location-outline"} size={17} color={locationEnabled ? COLORS.green : COLORS.gold} /><Text style={styles.exploreLocationText}>{locationEnabled ? (language === "ar" ? "نعرض لك الأماكن الأقرب حسب موقعك الحالي." : "Showing places nearest to your current location.") : (language === "ar" ? "فعّل موقعك لنقترح الأماكن الأقرب لك." : "Enable your location for the nearest places.")}</Text></View>
-              <Text style={styles.exploreQuickTitle}>{language === "ar" ? "اختصارات ذكية" : "Smart shortcuts"}</Text>
-              <View style={styles.exploreQuickGrid}>{filterOptions.filter((filter) => filter.key !== "nearest").map((filter) => <Pressable key={filter.key} style={styles.exploreQuickItem} onPress={() => { setPlaceTypeFilter("all"); setActiveFilter(filter.key); setActiveTab("home"); }}><Ionicons name={filter.key === "open" ? "time-outline" : filter.key === "ablution" ? "water-outline" : filter.key === "women" ? "people-outline" : "heart-outline"} size={17} color={COLORS.teal} /><Text style={styles.exploreQuickText}>{filter.label}</Text><Ionicons name="chevron-back" size={15} color={COLORS.muted} /></Pressable>)}</View>
+              <View style={styles.exploreLocationNote}><Ionicons name={userLocation ? "checkmark-circle" : "location-outline"} size={17} color={userLocation ? COLORS.green : COLORS.gold} /><Text style={styles.exploreLocationText}>{userLocation ? (language === "ar" ? "النتائج القريبة مرتبة بمسافة مباشرة من GPS، والأسماء الرسمية من الوزارة." : "Nearby results use straight-line GPS distance; official names remain Ministry names.") : (language === "ar" ? "فعّل GPS لحساب أقرب مسجد؛ لا نعرض مسافات تقديرية." : "Enable GPS to calculate the nearest mosque; no estimated distances are shown.")}</Text></View>
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
@@ -1317,7 +1338,7 @@ const styles = StyleSheet.create({
   filterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
   filterTextActive: { color: COLORS.white },
   dot: { width: 6, height: 6, borderRadius: 3 },
-  mapCard: { height: 205, borderRadius: 23, overflow: "hidden", backgroundColor: "#E3EFEF", position: "relative", borderWidth: 1, borderColor: "#D9E5E7", marginBottom: 8, shadowColor: COLORS.navy, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
+  mapCard: { height: 300, borderRadius: 23, overflow: "hidden", backgroundColor: "#E3EFEF", position: "relative", borderWidth: 1, borderColor: "#D9E5E7", marginBottom: 8, shadowColor: COLORS.navy, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
   mapHeader: { position: "absolute", zIndex: 3, top: 10, left: 11, right: 11, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   mapTitleBadge: { flexDirection: "row-reverse", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.93)", borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 },
   mapBadge: { backgroundColor: "rgba(255,255,255,0.9)", color: COLORS.green, fontSize: 10, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 },
@@ -1328,9 +1349,16 @@ const styles = StyleSheet.create({
   legendDot: { width: 7, height: 7, borderRadius: 4 },
   legendLocation: { backgroundColor: "#4A94F5", borderWidth: 2, borderColor: "#DDEBFF" },
   legendText: { color: COLORS.muted, fontSize: 9, fontWeight: "800" },
-  mapCoverage: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8, paddingHorizontal: 4, marginBottom: 16 },
-  mapCoverageText: { flex: 1, color: COLORS.muted, fontSize: 9, lineHeight: 14, textAlign: "right" },
+  mapCoverage: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8, paddingHorizontal: 4, marginBottom: 10 },
+  mapCoverageText: { flex: 1, color: COLORS.muted, fontSize: 11, lineHeight: 16, textAlign: "right" },
   mapCoverageRetry: { color: COLORS.green, fontSize: 10, fontWeight: "800" },
+  nearestMosqueCard: { flexDirection: "row-reverse", alignItems: "center", gap: 10, backgroundColor: "#EAF7F3", borderWidth: 1, borderColor: "#CFE8DE", borderRadius: 15, padding: 12, marginBottom: 15 },
+  nearestMosqueCopy: { flex: 1, alignItems: "flex-end" },
+  nearestMosqueLabel: { color: COLORS.teal, fontSize: 10, fontWeight: "800", textAlign: "right" },
+  nearestMosqueName: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginTop: 3 },
+  nearestMosqueMeta: { color: COLORS.muted, fontSize: 10, textAlign: "right", lineHeight: 15, marginTop: 3 },
+  nearestMosqueAction: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 4, backgroundColor: COLORS.navy, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 8 },
+  nearestMosqueActionText: { color: COLORS.white, fontSize: 10, fontWeight: "800" },
   listHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 9 },
   nearbyCount: { color: COLORS.ink, fontSize: 13, fontWeight: "800" },
   emptyPlacesNotice: { backgroundColor: "#F5F8FA", borderRadius: 12, padding: 11, marginBottom: 10, borderWidth: 1, borderColor: COLORS.line },
@@ -1348,6 +1376,7 @@ const styles = StyleSheet.create({
   mosqueIcon: { backgroundColor: "#E5F7F0" },
   musallaIcon: { backgroundColor: COLORS.musallaSoft },
   placeInfo: { flex: 1 },
+  placeSourceText: { color: COLORS.muted, fontSize: 10, lineHeight: 15, textAlign: "right", marginBottom: 4 },
   nameRow: { flexDirection: "row-reverse", alignItems: "center", gap: 7, marginBottom: 6 },
   placeName: { color: COLORS.ink, fontSize: 15, fontWeight: "900", textAlign: "right", flexShrink: 1 },
   typePill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3 },

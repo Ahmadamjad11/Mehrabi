@@ -11,6 +11,7 @@ export default function OsmMapFrame({ html }: OsmMapFrameProps) {
       source={{ html }}
       style={StyleSheet.absoluteFill}
       originWhitelist={["*"]}
+      userAgent="MehrabiPrayerMap/1.0 (+https://mehrabi-dvz6x8x.manus.space)"
       javaScriptEnabled
       onMessage={(event) => {
         try {
