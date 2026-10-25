@@ -34,6 +34,19 @@ describe("OSM mosque map sidecar", () => {
     }
   });
 
+  it("keeps the map marker total distinct from the community-place list", () => {
+    const matchesWithOfficialCoordinates = features.filter((feature) => feature.officialMatch?.officialHasCoordinates);
+    const matchesFillingMissingCoordinates = features.filter(
+      (feature) => feature.officialMatch && !feature.officialMatch.officialHasCoordinates,
+    );
+    const unlinkedFeatures = features.filter((feature) => !feature.officialMatch);
+
+    expect(matchesWithOfficialCoordinates).toHaveLength(4);
+    expect(matchesFillingMissingCoordinates).toHaveLength(136);
+    expect(unlinkedFeatures).toHaveLength(863);
+    expect(268 + features.length - matchesWithOfficialCoordinates.length).toBe(1267);
+  });
+
   it("keeps ministry matches one-to-one and reports only the missing-coordinate additions", () => {
     const sourceKeys = officialMatches.map(({ match }) => match.sourceKey);
     expect(new Set(sourceKeys).size).toBe(sourceKeys.length);

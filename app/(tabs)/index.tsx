@@ -255,11 +255,12 @@ const OSM_OFFICIAL_MATCHES_TO_FILL = OSM_MAP_FEATURES.filter(
   (feature) => feature.officialMatch && !feature.officialMatch.officialHasCoordinates,
 ).length;
 const OSM_UNLINKED_FEATURES = OSM_MAP_FEATURES.filter((feature) => !feature.officialMatch).length;
+const OSM_FEATURES_WITH_OFFICIAL_COORDINATES = OSM_MAP_FEATURES.filter((feature) => feature.officialMatch?.officialHasCoordinates).length;
 const OSM_COPYRIGHT_URL = "https://www.openstreetmap.org/copyright";
 
 const safeInlineJson = (value: unknown) =>
   (JSON.stringify(value) ?? "null")
-    .replace(/</g, "\\u003c")
+  .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029");
 
@@ -496,6 +497,23 @@ export default function HomeScreen() {
   const officialMosqueTotal = officialMosquesMapQuery.data?.totalDisplayable ?? 0;
   const officialLocatedCount = Math.min(officialMosqueTotal, officialMosqueMapPoints.length + OSM_OFFICIAL_MATCHES_TO_FILL);
   const officialMosquesWithoutCoordinates = Math.max(0, officialMosqueTotal - officialLocatedCount);
+  const displayedOsmFeatureCount = officialMosquesMapQuery.isSuccess
+    ? OSM_MAP_FEATURES.length - OSM_FEATURES_WITH_OFFICIAL_COORDINATES
+    : OSM_MAP_FEATURES.length;
+  const displayedMapMarkerCount = publicMapPlaces.length
+    + displayedOsmFeatureCount
+    + (officialMosquesMapQuery.isSuccess ? officialMosqueMapPoints.length : 0);
+  const officialCoverageDescription = officialMosquesMapQuery.isSuccess
+    ? language === "ar"
+      ? `${officialLocatedCount} سجل وزارة محدد الموقع (${officialMosqueMapPoints.length} بإحداثيات الوزارة + ${OSM_OFFICIAL_MATCHES_TO_FILL} مواقع OSM)`
+      : `${officialLocatedCount} Ministry records located (${officialMosqueMapPoints.length} registry coordinates + ${OSM_OFFICIAL_MATCHES_TO_FILL} OSM locations)`
+    : officialMosquesMapQuery.isLoading
+      ? language === "ar"
+        ? `${OSM_OFFICIAL_MATCHES_TO_FILL} سجلًا رسميًا له موقع OSM؛ جارٍ تحميل الإحداثيات الرسمية`
+        : `${OSM_OFFICIAL_MATCHES_TO_FILL} Ministry records have OSM locations; loading registry coordinates`
+      : language === "ar"
+        ? `${OSM_OFFICIAL_MATCHES_TO_FILL} سجلًا رسميًا له موقع OSM؛ تعذّر تحميل الإحداثيات الرسمية`
+        : `${OSM_OFFICIAL_MATCHES_TO_FILL} Ministry records have OSM locations; registry coordinates could not load`;
   const mapHtml = useMemo(
     () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess),
     [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess],
@@ -1003,9 +1021,6 @@ export default function HomeScreen() {
             <Text style={styles.sectionEyebrow}>{ui.guide}</Text>
             <Text style={styles.sectionTitle}>{ui.nearby}</Text>
           </View>
-          <Pressable onPress={() => Alert.alert(ui.listTitle, ui.listHint)}>
-            <Text style={styles.seeAll}>{ui.all}</Text>
-          </Pressable>
         </View>
 
         <View style={styles.discoveryCard}>
@@ -1035,20 +1050,25 @@ export default function HomeScreen() {
         </View>
         <View style={styles.mapCoverage}>
           <Text style={styles.mapCoverageText}>
-            {officialMosquesMapQuery.isLoading || publicMapPlacesQuery.isLoading
-              ? (language === "ar" ? "جاري تحميل مواقع الخريطة..." : "Loading map locations...")
-              : officialMosquesMapQuery.isError || publicMapPlacesQuery.isError
-                ? (language === "ar" ? "تعذر تحميل بيانات مواقع الخريطة." : "Could not load map locations.")
-              : language === "ar"
-                  ? `${officialLocatedCount} سجل وزارة على الخريطة (${officialMosqueMapPoints.length} بإحداثيات الوزارة + ${OSM_OFFICIAL_MATCHES_TO_FILL} مواقع OSM) · ${OSM_UNLINKED_FEATURES} معلم OSM غير مربوط بسجل وزارة`
-                  : `${officialLocatedCount} ministry records mapped (${officialMosqueMapPoints.length} registry coordinates + ${OSM_OFFICIAL_MATCHES_TO_FILL} OSM locations) · ${OSM_UNLINKED_FEATURES} OSM features not confidently linked to the Ministry`}
+            {language === "ar"
+              ? `${displayedMapMarkerCount} علامة مرسومة على الخريطة · ${officialCoverageDescription} · ${OSM_UNLINKED_FEATURES} معلم OSM غير مربوط بسجل الوزارة`
+              : `${displayedMapMarkerCount} markers on the map · ${officialCoverageDescription} · ${OSM_UNLINKED_FEATURES} OSM features not confidently linked to the Ministry`}
           </Text>
-          {!officialMosquesMapQuery.isLoading && !officialMosquesMapQuery.isError && <Text style={styles.mapCoverageText}>{language === "ar" ? `OSM: ${OSM_MAP_FEATURES.length} معلمًا (${osmMosqueMapData.metadata.featuresByKind.mosque} جامعًا، ${osmMosqueMapData.metadata.featuresByKind.musalla} مصليات) · ${officialMosquesWithoutCoordinates} سجلًا رسميًا بلا موقع` : `OSM: ${OSM_MAP_FEATURES.length} features (${osmMosqueMapData.metadata.featuresByKind.mosque} mosques, ${osmMosqueMapData.metadata.featuresByKind.musalla} musallas) · ${officialMosquesWithoutCoordinates} official records remain unmapped`}</Text>}
+          <Text style={styles.mapCoverageText}>{language === "ar" ? `OSM: ${OSM_MAP_FEATURES.length} معلمًا (${osmMosqueMapData.metadata.featuresByKind.mosque} جامعًا، ${osmMosqueMapData.metadata.featuresByKind.musalla} مصليات) · ${officialMosquesMapQuery.isSuccess ? `${officialMosquesWithoutCoordinates} سجل رسمي بلا موقع` : "الإحداثيات الرسمية غير متاحة الآن"}` : `OSM: ${OSM_MAP_FEATURES.length} features (${osmMosqueMapData.metadata.featuresByKind.mosque} mosques, ${osmMosqueMapData.metadata.featuresByKind.musalla} musallas) · ${officialMosquesMapQuery.isSuccess ? `${officialMosquesWithoutCoordinates} official records remain unmapped` : "Official coordinates are temporarily unavailable"}`}</Text>
           {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <Pressable onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable>}
         </View>
 
         {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
-        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{filteredPlaces.length} {ui.nearbyCount}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
+        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? `أماكن مجتمعية معروضة: ${filteredPlaces.length}` : `Community places shown: ${filteredPlaces.length}`}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
+        {filteredPlaces.length === 0 && !placesQuery.isLoading && (
+          <View style={styles.emptyPlacesNotice}>
+            <Text style={styles.emptyPlacesNoticeText}>
+              {language === "ar"
+                ? "لا توجد أماكن مجتمعية تطابق البحث والتصفية الحالية. مواقع وزارة الأوقاف وOpenStreetMap تظهر كعلامات على الخريطة أعلاه."
+                : "No community places match the current search and filters. Ministry and OpenStreetMap locations are marked on the map above."}
+            </Text>
+          </View>
+        )}
         {placeGroups.map(({ groupTitle, groupPlaces }) => groupPlaces.length > 0 && <View key={groupTitle}>
           <Text style={[styles.groupTitle, groupTitle === ui.mosques ? styles.mosqueTitle : styles.musallaTitle]}>{groupTitle}</Text>
           {groupPlaces.map((place) => (
@@ -1313,6 +1333,8 @@ const styles = StyleSheet.create({
   mapCoverageRetry: { color: COLORS.green, fontSize: 10, fontWeight: "800" },
   listHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 9 },
   nearbyCount: { color: COLORS.ink, fontSize: 13, fontWeight: "800" },
+  emptyPlacesNotice: { backgroundColor: "#F5F8FA", borderRadius: 12, padding: 11, marginBottom: 10, borderWidth: 1, borderColor: COLORS.line },
+  emptyPlacesNoticeText: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "right", writingDirection: "rtl" },
   sortText: { color: COLORS.muted, fontSize: 11 },
   offlineNotice: { color: COLORS.gold, backgroundColor: COLORS.goldSoft, borderRadius: 8, padding: 8, fontSize: 10, textAlign: "right", marginBottom: 8 },
   groupTitle: { color: COLORS.navy, fontSize: 16, fontWeight: "800", textAlign: "right", marginTop: 10, marginBottom: 8 },
