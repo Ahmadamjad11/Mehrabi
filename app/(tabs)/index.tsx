@@ -490,6 +490,14 @@ export default function HomeScreen() {
     nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
     go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", logout: "Sign out", emailLogin: "Sign in", emailRegister: "Create account", email: "Email", phone: "Phone number", identifier: "Email or phone number", password: "Password", name: "Full name", forgotPassword: "Forgot password?", sendReset: "Send reset link", resendVerification: "Resend code", createAccount: "Create account", haveAccount: "Already have an account? Sign in", backToLogin: "Back to sign in", verifyHint: "Check your inbox and enter the 6-digit code before signing in.", resetSent: "If this email is registered, you will receive a reset link shortly.", verifySent: "Account created. Check your inbox and enter the code.", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
   };
+  const filterOptions = [
+    { key: "nearest", label: ui.nearest, icon: "navigate-outline" },
+    { key: "open", label: ui.open, icon: "time-outline" },
+    { key: "ablution", label: ui.ablution, icon: "water-outline" },
+    { key: "women", label: ui.women, icon: "people-outline" },
+    { key: "favorites", label: language === "ar" ? "المفضلة" : "Favorites", icon: "heart-outline" },
+  ] as const;
+  const activeFilterLabel = filterOptions.find((option) => option.key === activeFilter)?.label ?? ui.nearest;
   const serverPlaceFilters = {
     search: query.trim() || undefined,
     openNow: activeFilter === "open" ? true : undefined,
@@ -551,9 +559,6 @@ export default function HomeScreen() {
       status: location.status,
     }));
   }, [mapLocationCandidates, userLocation]);
-  const nearestMosque = userLocation
-    ? sourcePlaces.find((place) => place.type === "مسجد" && (!query.trim() || [place.name, ...(place.alternateNames ?? [])].some((name) => name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())))) ?? null
-    : null;
   const mapHtml = useMemo(
     () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation),
     [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation],
@@ -1014,19 +1019,6 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <View style={styles.quickActions}>
-          <Pressable style={styles.quickAction} onPress={() => void openQibla()}>
-            <View style={[styles.quickIcon, styles.quickIconGold]}><MaterialCommunityIcons name="compass-rose" size={21} color={COLORS.navy} /></View>
-            <Text style={styles.quickActionText}>{ui.qibla}</Text>
-            <Text style={styles.quickActionHint}>{language === "ar" ? "اتجاه دقيق" : "Accurate bearing"}</Text>
-          </Pressable>
-          <Pressable style={styles.quickAction} onPress={openAddPlace}>
-            <View style={[styles.quickIcon, styles.quickIconBlue]}><Ionicons name="add" size={22} color={COLORS.navy} /></View>
-            <Text style={styles.quickActionText}>{ui.add}</Text>
-            <Text style={styles.quickActionHint}>{language === "ar" ? "شارك الخير" : "Add a place"}</Text>
-          </Pressable>
-        </View>
-
         <View style={styles.sectionHeader}>
           <View>
             <Text style={styles.sectionEyebrow}>{ui.guide}</Text>
@@ -1035,14 +1027,10 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.discoveryCard}>
-          <View style={styles.discoveryTitleRow}>
-            <View style={styles.discoveryIcon}><Ionicons name="sparkles-outline" size={18} color={COLORS.gold} /></View>
-            <View style={styles.discoveryCopy}><Text style={styles.discoveryEyebrow}>{language === "ar" ? "اعثر على مكان صلاتك" : "Find your prayer place"}</Text><Text style={styles.discoveryTitle}>{language === "ar" ? "أين ستصلي اليوم؟" : "Where will you pray today?"}</Text></View>
-          </View>
           <View style={styles.searchBox}>
             <Ionicons name="search-outline" size={19} color={COLORS.muted} />
-            <TextInput value={query} onChangeText={setQuery} placeholder={ui.search} placeholderTextColor="#9DA8B3" style={styles.searchInput} textAlign="right" />
-            {query.length > 0 ? <Pressable onPress={() => setQuery("")}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable> : <View style={styles.shortcut}><Text style={styles.shortcutText}>⌘ K</Text></View>}
+            <TextInput value={query} onChangeText={setQuery} placeholder={ui.search} placeholderTextColor="#9DA8B3" style={styles.searchInput} textAlign="right" accessibilityLabel={ui.search} returnKeyType="search" />
+            {query.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel={language === "ar" ? "مسح البحث" : "Clear search"} onPress={() => setQuery("")}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable>}
           </View>
           <View style={styles.typeSegmentRow}>
             {([{ key: "all", label: language === "ar" ? "الكل" : "All", icon: "map-outline" }, { key: "mosque", label: ui.mosques, icon: "mosque" }, { key: "musalla", label: ui.musallas, icon: "home-city-outline" }] as const).map((option) => {
@@ -1050,6 +1038,11 @@ export default function HomeScreen() {
               return <Pressable key={option.key} onPress={() => setPlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
+          <Pressable style={styles.filterButton} onPress={() => setActiveTab("explore")} accessibilityRole="button">
+            <Ionicons name="options-outline" size={17} color={COLORS.navy} />
+            <Text style={styles.filterButtonText}>{language === "ar" ? "تصفية وترتيب" : "Filter & sort"}</Text>
+            <Text style={styles.filterButtonValue}>{activeFilterLabel}</Text>
+          </Pressable>
         </View>
 
         <View style={styles.mapCard}>
@@ -1058,34 +1051,22 @@ export default function HomeScreen() {
           <Pressable style={styles.mapControl} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
           <View style={styles.mapLegend}><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.mosqueGreen }]} /><Text style={styles.legendText}>{ui.mosques}</Text></View><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.musallaBlue }]} /><Text style={styles.legendText}>{ui.musallas}</Text></View>{locationEnabled && <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendLocation]} /><Text style={styles.legendText}>{language === "ar" ? "موقعك" : "You"}</Text></View>}</View>
         </View>
-        <View style={styles.mapCoverage}>
-          <Text style={styles.mapCoverageText}>{language === "ar" ? "الأسماء الرسمية من وزارة الأوقاف؛ والإحداثيات المكمّلة من OpenStreetMap. اضغط العلامة لمعرفة مصدرها." : "Official names come from the Ministry; supplementary coordinates come from OpenStreetMap. Tap a marker to see its source."}</Text>
-          {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <Pressable onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable>}
+        {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <View style={styles.mapCoverage}><Pressable accessibilityRole="button" onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable></View>}
+        <View style={styles.quickActions}>
+          <Pressable style={styles.quickAction} onPress={() => void openQibla()} accessibilityRole="button">
+            <View style={[styles.quickIcon, styles.quickIconGold]}><MaterialCommunityIcons name="compass-rose" size={21} color={COLORS.navy} /></View>
+            <Text style={styles.quickActionText}>{ui.qibla}</Text>
+            <Text style={styles.quickActionHint}>{language === "ar" ? "اتجاه دقيق" : "Accurate bearing"}</Text>
+          </Pressable>
+          <Pressable style={styles.quickAction} onPress={openAddPlace} accessibilityRole="button">
+            <View style={[styles.quickIcon, styles.quickIconBlue]}><Ionicons name="add" size={22} color={COLORS.navy} /></View>
+            <Text style={styles.quickActionText}>{ui.add}</Text>
+            <Text style={styles.quickActionHint}>{language === "ar" ? "شارك الخير" : "Add a place"}</Text>
+          </Pressable>
         </View>
 
         {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
-        {nearestMosque ? (
-          <View style={styles.nearestMosqueCard}>
-            <View style={styles.nearestMosqueCopy}>
-              <Text style={styles.nearestMosqueLabel}>{language === "ar" ? "أقرب مسجد إلى موقعك" : "Nearest mosque to your location"}</Text>
-              <Text style={styles.nearestMosqueName}>{nearestMosque.name}</Text>
-              <Text style={styles.nearestMosqueMeta}>{nearestMosque.distance} {language === "ar" ? "خط مستقيم" : "straight-line distance"} · {language === "ar" ? nearestMosque.sourceLabelAr : nearestMosque.sourceLabelEn}</Text>
-            </View>
-            <Pressable style={styles.nearestMosqueAction} onPress={() => { setPlaceTypeFilter("mosque"); setMapFocusLocation({ lat: nearestMosque.lat, lng: nearestMosque.lng }); }}>
-              <Ionicons name="map-outline" size={17} color={COLORS.white} />
-              <Text style={styles.nearestMosqueActionText}>{language === "ar" ? "اعرضه" : "Show"}</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.nearestMosqueCard}>
-            <View style={styles.nearestMosqueCopy}>
-              <Text style={styles.nearestMosqueLabel}>{language === "ar" ? "أقرب مسجد" : "Nearest mosque"}</Text>
-              <Text style={styles.nearestMosqueName}>{userLocation ? (language === "ar" ? "لا توجد نتيجة مطابقة للبحث الحالي" : "No mosque matches this search") : (language === "ar" ? "حدّد موقعك لحساب الأقرب بدقة" : "Set your location to calculate the nearest mosque")}</Text>
-            </View>
-            {!userLocation && <Pressable style={styles.nearestMosqueAction} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate-outline" size={17} color={COLORS.white} /><Text style={styles.nearestMosqueActionText}>{language === "ar" ? "موقعي" : "Locate"}</Text></Pressable>}
-          </View>
-        )}
-        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
+        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text></View>
         {!userLocation && (
           <View style={styles.emptyPlacesNotice}>
             <Text style={styles.emptyPlacesNoticeText}>
@@ -1096,7 +1077,7 @@ export default function HomeScreen() {
           </View>
         )}
         {userLocation && filteredPlaces.length === 0 && !placesQuery.isLoading && (
-          <View style={styles.emptyPlacesNotice}><Text style={styles.emptyPlacesNoticeText}>{language === "ar" ? "لا توجد مواقع تطابق البحث أو التصفية. جرّب «الكل» أو امسح البحث." : "No map locations match this search or filter. Try All or clear the search."}</Text></View>
+          <View style={styles.emptyPlacesNotice}><Text style={styles.emptyPlacesNoticeText}>{language === "ar" ? "لا توجد مواقع تطابق البحث أو التصفية. جرّب «الكل» أو امسح التصفية والبحث." : "No map locations match this search or filter. Try All or clear the filters and search."}</Text></View>
         )}
         {userLocation && nearestFivePlaces.map((place) => (
           <View key={place.id} style={[styles.placeCard, place.type === "مسجد" ? styles.mosqueCard : styles.musallaCard]}>
@@ -1125,12 +1106,15 @@ export default function HomeScreen() {
           <View style={styles.modalCard}>
             <Pressable style={styles.modalClose} onPress={() => setActiveTab("home")}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
             {activeTab === "explore" && <>
-              <View style={styles.exploreHero}><View style={styles.exploreHeroIcon}><Ionicons name="compass-outline" size={25} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{language === "ar" ? "اكتشف أماكن الصلاة حولك" : "Discover prayer places nearby"}</Text><Text style={styles.modalHint}>{language === "ar" ? "ابحث عن أقرب مسجد أو مصلى يناسب احتياجك." : "Find the nearest mosque or musalla for your needs."}</Text></View>
-              <View style={styles.exploreTypeCards}>
-                <Pressable style={[styles.exploreTypeCard, styles.exploreMosqueCard]} onPress={() => { setPlaceTypeFilter("mosque"); setActiveFilter("nearest"); setMapFocusLocation(null); setActiveTab("home"); }}><View style={styles.exploreCardIcon}><MaterialCommunityIcons name="mosque" size={23} color={COLORS.mosqueGreen} /></View><Text style={styles.exploreCardTitle}>{ui.mosques}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "إظهار على الخريطة ←" : "Show on map →"}</Text></Pressable>
-                <Pressable style={[styles.exploreTypeCard, styles.exploreMusallaCard]} onPress={() => { setPlaceTypeFilter("musalla"); setActiveFilter("nearest"); setMapFocusLocation(null); setActiveTab("home"); }}><View style={[styles.exploreCardIcon, styles.exploreCardIconBlue]}><MaterialCommunityIcons name="home-city-outline" size={23} color={COLORS.musallaBlue} /></View><Text style={styles.exploreCardTitle}>{ui.musallas}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "إظهار على الخريطة ←" : "Show on map →"}</Text></Pressable>
+              <View style={styles.exploreHero}><View style={styles.exploreHeroIcon}><Ionicons name="options-outline" size={25} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{language === "ar" ? "تصفية وترتيب النتائج" : "Filter and sort results"}</Text><Text style={styles.modalHint}>{language === "ar" ? "اختر طريقة عرض النتائج؛ البحث ونوع المكان يطبّقان مباشرة على الخريطة." : "Choose how results are filtered; search and place type also filter the map."}</Text></View>
+              <View style={styles.exploreQuickGrid}>
+                {filterOptions.map((option) => {
+                  const selected = activeFilter === option.key;
+                  return <Pressable key={option.key} style={styles.exploreRow} onPress={() => { setActiveFilter(option.key); setPlaceOffset(0); setActiveTab("home"); }} accessibilityRole="button" accessibilityState={{ selected }}><View style={{ flexDirection: "row-reverse", alignItems: "center", gap: 9 }}><Ionicons name={option.icon} size={18} color={selected ? COLORS.green : COLORS.muted} /><Text style={styles.exploreRowText}>{option.label}</Text></View><Ionicons name={selected ? "checkmark-circle" : "chevron-back"} size={17} color={selected ? COLORS.green : COLORS.muted} /></Pressable>;
+                })}
               </View>
-              <View style={styles.exploreLocationNote}><Ionicons name={userLocation ? "checkmark-circle" : "location-outline"} size={17} color={userLocation ? COLORS.green : COLORS.gold} /><Text style={styles.exploreLocationText}>{userLocation ? (language === "ar" ? "النتائج القريبة مرتبة بمسافة مباشرة من GPS، والأسماء الرسمية من الوزارة." : "Nearby results use straight-line GPS distance; official names remain Ministry names.") : (language === "ar" ? "فعّل GPS لحساب أقرب مسجد؛ لا نعرض مسافات تقديرية." : "Enable GPS to calculate the nearest mosque; no estimated distances are shown.")}</Text></View>
+              <View style={styles.exploreLocationNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.gold} /><Text style={styles.exploreLocationText}>{language === "ar" ? "فلاتر الدوام والخدمات تعتمد على البيانات المتاحة، وقد لا تُظهر بعض المواقع في قائمة النتائج عند استخدامها." : "Hours and amenity filters depend on available data and may omit some places from the results list."}</Text></View>
+              <Pressable style={styles.secondaryModalButton} onPress={() => { setActiveFilter("nearest"); setPlaceTypeFilter("all"); setQuery(""); setPlaceOffset(0); setActiveTab("home"); }}><Text style={styles.secondaryModalText}>{language === "ar" ? "مسح البحث والفلاتر" : "Clear search and filters"}</Text></Pressable>
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
@@ -1235,7 +1219,6 @@ export default function HomeScreen() {
       </Modal>
       <View style={styles.tabBar}>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab("home")}><View style={[styles.tabIconWrap, activeTab === "home" && styles.tabIconWrapActive]}><Ionicons name="home" size={20} color={activeTab === "home" ? COLORS.navy : COLORS.muted} /></View><Text style={[styles.tabText, activeTab === "home" && styles.tabActive]}>{ui.home}</Text></Pressable>
-        <Pressable style={styles.tabItem} onPress={() => setActiveTab("explore")}><View style={[styles.tabIconWrap, activeTab === "explore" && styles.tabIconWrapActive]}><Ionicons name="compass-outline" size={21} color={activeTab === "explore" ? COLORS.navy : COLORS.muted} /></View><Text style={[styles.tabText, activeTab === "explore" && styles.tabActive]}>{ui.explore}</Text></Pressable>
         <Pressable style={[styles.tabItem, styles.qiblaTabItem]} onPress={() => void openQibla()}><View style={styles.qiblaTabIcon}><MaterialCommunityIcons name="compass-rose" size={25} color={COLORS.white} /></View><Text style={[styles.tabText, styles.qiblaTabText]}>{ui.qibla}</Text></Pressable>
         <Pressable style={styles.tabItem} onPress={() => setActiveTab("account")}><View style={[styles.tabIconWrap, activeTab === "account" && styles.tabIconWrapActive]}><Ionicons name="person-outline" size={20} color={activeTab === "account" ? COLORS.navy : COLORS.muted} /></View><Text style={[styles.tabText, activeTab === "account" && styles.tabActive]}>{ui.account}</Text></Pressable>
       </View>
@@ -1309,11 +1292,6 @@ const styles = StyleSheet.create({
   quickActionText: { color: COLORS.ink, fontSize: 12, fontWeight: "900", textAlign: "right" },
   quickActionHint: { color: COLORS.muted, fontSize: 9, marginTop: 3, textAlign: "right" },
   discoveryCard: { backgroundColor: "#F0F7F7", borderRadius: 24, padding: 14, marginBottom: 17, borderWidth: 1, borderColor: "#DCEBEA" },
-  discoveryTitleRow: { flexDirection: "row-reverse", alignItems: "center", gap: 9, marginBottom: 12 },
-  discoveryIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center" },
-  discoveryCopy: { flex: 1, alignItems: "flex-end" },
-  discoveryEyebrow: { color: COLORS.teal, fontSize: 10, fontWeight: "800", textAlign: "right", marginBottom: 2 },
-  discoveryTitle: { color: COLORS.ink, fontSize: 17, fontWeight: "900", textAlign: "right" },
   typeSegmentRow: { flexDirection: "row-reverse", gap: 6, marginTop: 10 },
   typeSegment: { flex: 1, height: 39, borderRadius: 12, backgroundColor: COLORS.white, borderWidth: 1, borderColor: "#DDE7EA", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 5 },
   typeSegmentActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
@@ -1330,13 +1308,6 @@ const styles = StyleSheet.create({
   seeAll: { color: COLORS.navy, fontSize: 12, fontWeight: "700", paddingBottom: 2 },
   searchBox: { height: 53, borderRadius: 17, backgroundColor: COLORS.white, borderWidth: 1, borderColor: "#D9E5EA", flexDirection: "row-reverse", alignItems: "center", paddingHorizontal: 15, gap: 9, shadowColor: COLORS.navy, shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
   searchInput: { flex: 1, color: COLORS.ink, fontSize: 13, paddingVertical: 0 },
-  shortcut: { backgroundColor: COLORS.canvas, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 },
-  shortcutText: { color: COLORS.muted, fontSize: 10 },
-  filters: { flexDirection: "row-reverse", gap: 7, paddingVertical: 12 },
-  filterChip: { flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.line, borderRadius: 999, paddingHorizontal: 12, height: 35 },
-  filterChipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
-  filterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
-  filterTextActive: { color: COLORS.white },
   dot: { width: 6, height: 6, borderRadius: 3 },
   mapCard: { height: 300, borderRadius: 23, overflow: "hidden", backgroundColor: "#E3EFEF", position: "relative", borderWidth: 1, borderColor: "#D9E5E7", marginBottom: 8, shadowColor: COLORS.navy, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
   mapHeader: { position: "absolute", zIndex: 3, top: 10, left: 11, right: 11, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
@@ -1350,20 +1321,11 @@ const styles = StyleSheet.create({
   legendLocation: { backgroundColor: "#4A94F5", borderWidth: 2, borderColor: "#DDEBFF" },
   legendText: { color: COLORS.muted, fontSize: 9, fontWeight: "800" },
   mapCoverage: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8, paddingHorizontal: 4, marginBottom: 10 },
-  mapCoverageText: { flex: 1, color: COLORS.muted, fontSize: 11, lineHeight: 16, textAlign: "right" },
   mapCoverageRetry: { color: COLORS.green, fontSize: 10, fontWeight: "800" },
-  nearestMosqueCard: { flexDirection: "row-reverse", alignItems: "center", gap: 10, backgroundColor: "#EAF7F3", borderWidth: 1, borderColor: "#CFE8DE", borderRadius: 15, padding: 12, marginBottom: 15 },
-  nearestMosqueCopy: { flex: 1, alignItems: "flex-end" },
-  nearestMosqueLabel: { color: COLORS.teal, fontSize: 10, fontWeight: "800", textAlign: "right" },
-  nearestMosqueName: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginTop: 3 },
-  nearestMosqueMeta: { color: COLORS.muted, fontSize: 10, textAlign: "right", lineHeight: 15, marginTop: 3 },
-  nearestMosqueAction: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 4, backgroundColor: COLORS.navy, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 8 },
-  nearestMosqueActionText: { color: COLORS.white, fontSize: 10, fontWeight: "800" },
   listHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 9 },
   nearbyCount: { color: COLORS.ink, fontSize: 13, fontWeight: "800" },
   emptyPlacesNotice: { backgroundColor: "#F5F8FA", borderRadius: 12, padding: 11, marginBottom: 10, borderWidth: 1, borderColor: COLORS.line },
   emptyPlacesNoticeText: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "right", writingDirection: "rtl" },
-  sortText: { color: COLORS.muted, fontSize: 11 },
   offlineNotice: { color: COLORS.gold, backgroundColor: COLORS.goldSoft, borderRadius: 8, padding: 8, fontSize: 10, textAlign: "right", marginBottom: 8 },
   groupTitle: { color: COLORS.navy, fontSize: 16, fontWeight: "800", textAlign: "right", marginTop: 10, marginBottom: 8 },
   mosqueTitle: { color: COLORS.mosqueGreen },
@@ -1438,15 +1400,6 @@ const styles = StyleSheet.create({
   exploreRowText: { color: COLORS.ink, fontSize: 14, fontWeight: "700" },
   exploreHero: { alignItems: "flex-end", marginTop: 8, marginBottom: 14 },
   exploreHeroIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginBottom: 10 },
-  exploreTypeCards: { flexDirection: "row-reverse", gap: 9, marginBottom: 12 },
-  exploreTypeCard: { flex: 1, borderRadius: 17, padding: 13, borderWidth: 1, minHeight: 142, alignItems: "flex-end" },
-  exploreMosqueCard: { backgroundColor: "#F0FAF6", borderColor: "#D5EEE3" },
-  exploreMusallaCard: { backgroundColor: "#F3F4FF", borderColor: "#E0E3FF" },
-  exploreCardIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center", marginBottom: 11 },
-  exploreCardIconBlue: { backgroundColor: COLORS.white },
-  exploreCardTitle: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right" },
-  exploreCardCount: { color: COLORS.muted, fontSize: 10, marginTop: 3, textAlign: "right" },
-  exploreCardAction: { color: COLORS.navy, fontSize: 10, fontWeight: "900", marginTop: "auto", textAlign: "right" },
   exploreLocationNote: { flexDirection: "row-reverse", alignItems: "center", gap: 7, backgroundColor: COLORS.goldSoft, borderRadius: 12, padding: 10, marginBottom: 16 },
   exploreLocationText: { flex: 1, color: COLORS.navy, fontSize: 10, fontWeight: "700", textAlign: "right", lineHeight: 16 },
   exploreQuickTitle: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginBottom: 5 },
