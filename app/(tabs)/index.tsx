@@ -2,9 +2,11 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import * as IntentLauncher from "expo-intent-launcher";
+import Constants from "expo-constants";
 import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   AppState,
@@ -27,7 +29,7 @@ import osmMosqueMapData from "../../data/osm_mosque_map_points.json";
 import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
-import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
+import { buildPrayerReminderBody, getPrayerReminderIdentifier, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { buildMapLocationCandidates, rankMapLocationsByDistance } from "@/lib/mapLocations";
 
@@ -115,36 +117,66 @@ const clearPrayerReminderSchedule = async () => {
   // Cancel only prayer-time reminders. Deferred ten-minute reminders must
   // survive the foreground reschedule triggered when an action opens the app.
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  await Promise.all(scheduled
-    .filter((item) => item.trigger && (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
-    .map((item) => Notifications.cancelScheduledNotificationAsync(item.identifier)));
+  const reminderIds = new Set(scheduled
+    .filter((item) => (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
+    .map((item) => item.identifier));
   const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
-  if (!stored) return;
-  const ids = JSON.parse(stored) as string[];
-  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
+  if (stored) {
+    try {
+      for (const id of JSON.parse(stored) as string[]) reminderIds.add(id);
+    } catch {
+      // The system-scheduled list above still allows cancellation if the local ID index is corrupt.
+    }
+  }
+  await Promise.all([...reminderIds].map((id) =>
+    Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined),
+  ));
+  const remaining = await Notifications.getAllScheduledNotificationsAsync();
+  const remainingPrayerReminders = remaining.filter((item) =>
+    (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder,
+  );
+  if (remainingPrayerReminders.length > 0) {
+    throw new Error(`Failed to cancel ${remainingPrayerReminders.length} prayer reminders`);
+  }
   await AsyncStorage.removeItem(REMINDER_IDS_KEY);
 };
 
-const schedulePrayerReminders = async (minutesBefore: number, location: { lat: number; lng: number } | null) => {
+const schedulePrayerReminders = async (
+  minutesBefore: number,
+  location: { lat: number; lng: number } | null,
+  isCurrent: () => boolean = () => true,
+) => {
   if (Platform.OS === "web") return;
   const ids: string[] = [];
   try {
-    await clearPrayerReminderSchedule();
+    const existing = await Notifications.getAllScheduledNotificationsAsync();
+    const storedIdsValue = await AsyncStorage.getItem(REMINDER_IDS_KEY);
+    const storedIds = storedIdsValue ? JSON.parse(storedIdsValue) as string[] : [];
+    const existingIds = new Set([
+      ...storedIds,
+      ...existing
+        .filter((item) => (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
+        .map((item) => item.identifier),
+    ]);
     const now = new Date();
     const scheduledKeys = new Set<string>();
     const firstJordanDate = getJordanCalendarDate(now);
     for (let dayOffset = 0; dayOffset < PRAYER_REMINDER_DAYS; dayOffset += 1) {
+      if (!isCurrent()) return;
       const date = new Date(firstJordanDate.getTime());
       date.setDate(date.getDate() + dayOffset);
       const prayerSchedule = getPrayerSchedule(date, location);
       const scheduledPrayerNames = prayerSchedule.map(([name]) => name);
-      for (const [name, prayerTime] of prayerSchedule) {
+      for (const [prayerIndex, [name, prayerTime]] of prayerSchedule.entries()) {
+        if (!isCurrent()) return;
         const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
         if (triggerDate <= now) continue;
         const reminderKey = `${name}:${triggerDate.getTime()}`;
         if (scheduledKeys.has(reminderKey)) continue;
         scheduledKeys.add(reminderKey);
+        const identifier = getPrayerReminderIdentifier(date.getFullYear(), date.getMonth(), date.getDate(), prayerIndex);
         const id = await Notifications.scheduleNotificationAsync({
+          identifier,
           content: {
             title: "نداء محرابي",
             body: buildPrayerReminderBody(minutesBefore, name, scheduledPrayerNames),
@@ -156,10 +188,20 @@ const schedulePrayerReminders = async (minutesBefore: number, location: { lat: n
         ids.push(id);
       }
     }
+    if (!isCurrent()) return;
+    await Promise.all([...existingIds].filter((id) => !ids.includes(id)).map((id) =>
+      Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined),
+    ));
     await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
   } catch (error) {
-    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-    await AsyncStorage.removeItem(REMINDER_IDS_KEY).catch(() => undefined);
+    const prior = await AsyncStorage.getItem(REMINDER_IDS_KEY).catch(() => null);
+    let priorIds: string[] = [];
+    try {
+      priorIds = prior ? JSON.parse(prior) as string[] : [];
+    } catch {
+      // Keep the system-scheduled notifications; the next successful refresh repairs this index.
+    }
+    await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify([...new Set([...priorIds, ...ids])])).catch(() => undefined);
     throw error;
   }
 };
@@ -476,9 +518,11 @@ export default function HomeScreen() {
   const [emailAuthOtp, setEmailAuthOtp] = useState("");
   const [remindersEnabled, setRemindersEnabled] = useState(false);
   const [reminderMinutes, setReminderMinutes] = useState<15 | 30 | 45>(30);
-  const reminderSettingsLoadedRef = useRef(false);
+  const [reminderScheduleError, setReminderScheduleError] = useState<string | null>(null);
+  const [reminderSettingsLoaded, setReminderSettingsLoaded] = useState(false);
   const reminderScheduleKeyRef = useRef<string | null>(null);
-  const reminderSchedulingRef = useRef(false);
+  const reminderSyncGenerationRef = useRef(0);
+  const reminderSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const ui = language === "ar" ? {
     greeting: "صباح الخير ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
@@ -569,20 +613,78 @@ export default function HomeScreen() {
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
 
+  const queuePrayerReminderSync = useCallback((enabled: boolean, minutes: number, location: { lat: number; lng: number } | null) => {
+    const jordanToday = getJordanCalendarDate(new Date());
+    const locationKey = location ? `${location.lat.toFixed(3)},${location.lng.toFixed(3)}` : "default";
+    const scheduleKey = enabled
+      ? `${jordanToday.getFullYear()}-${jordanToday.getMonth()}-${jordanToday.getDate()}-${minutes}-${locationKey}`
+      : "disabled";
+    if (reminderScheduleKeyRef.current === scheduleKey) return reminderSyncQueueRef.current;
+    const generation = ++reminderSyncGenerationRef.current;
+    reminderScheduleKeyRef.current = scheduleKey;
+    reminderSyncQueueRef.current = reminderSyncQueueRef.current.catch(() => undefined).then(async () => {
+      if (generation !== reminderSyncGenerationRef.current) return;
+      try {
+        if (!enabled) {
+          await clearPrayerReminderSchedule();
+          if (generation === reminderSyncGenerationRef.current) {
+            reminderScheduleKeyRef.current = "disabled";
+            setReminderScheduleError(null);
+          }
+          return;
+        }
+        setReminderScheduleError(null);
+        await schedulePrayerReminders(minutes, location, () => generation === reminderSyncGenerationRef.current);
+        if (generation === reminderSyncGenerationRef.current) {
+          reminderScheduleKeyRef.current = scheduleKey;
+          setReminderScheduleError(null);
+        }
+      } catch (error) {
+        console.warn("Prayer reminder synchronization failed; it will be retried.", error);
+        if (generation === reminderSyncGenerationRef.current) {
+          if (!enabled) reminderScheduleKeyRef.current = null;
+          setReminderScheduleError(language === "ar" ? "تعذرت مزامنة التذكيرات. سيحاول التطبيق مجددًا عند فتحه." : "Could not synchronize reminders. The app will retry when reopened.");
+        }
+      }
+    });
+    return reminderSyncQueueRef.current;
+  }, [language]);
+
   const updatePrayerReminders = async (enabled: boolean, minutes = reminderMinutes) => {
     if (enabled) {
-      const ready = await configurePrayerNotifications();
+      let ready = false;
+      try {
+        ready = await configurePrayerNotifications();
+      } catch {
+        ready = false;
+      }
       if (!ready) {
         Alert.alert(language === "ar" ? "التنبيهات غير مفعّلة" : "Notifications are disabled", language === "ar" ? "اسمح للتطبيق بالتنبيهات من إعدادات الهاتف." : "Allow notifications in your phone settings.");
         return;
       }
-    } else if (Platform.OS !== "web") {
-      await clearPrayerReminderSchedule();
-      reminderScheduleKeyRef.current = null;
     }
     setReminderMinutes(minutes as 15 | 30 | 45);
+    setReminderScheduleError(null);
     setRemindersEnabled(enabled);
     await AsyncStorage.setItem(REMINDER_SETTINGS_KEY, JSON.stringify({ enabled, minutes }));
+    if (Platform.OS !== "web") await queuePrayerReminderSync(enabled, minutes, userLocation);
+  };
+
+  const openExactAlarmSettings = async () => {
+    try {
+      const packageName = Constants.expoConfig?.android?.package;
+      if (!packageName) throw new Error("Android package name is unavailable");
+      await IntentLauncher.startActivityAsync(IntentLauncher.ActivityAction.REQUEST_SCHEDULE_EXACT_ALARM, {
+        data: `package:${packageName}`,
+      });
+      reminderScheduleKeyRef.current = null;
+      await queuePrayerReminderSync(true, reminderMinutes, userLocation);
+    } catch {
+      Alert.alert(
+        language === "ar" ? "تعذر فتح إعداد الدقة" : "Could not open exact-alarm settings",
+        language === "ar" ? "افتح إعدادات الهاتف > التطبيقات > محرابي > التنبيهات والمنبهات، ثم اسمح بالتنبيهات الدقيقة." : "Open Settings > Apps > Mehrabi > Alarms & reminders, then allow exact alarms.",
+      );
+    }
   };
 
   useEffect(() => {
@@ -599,7 +701,7 @@ export default function HomeScreen() {
       const minutes = settings?.minutes === 15 || settings?.minutes === 45 ? settings.minutes : 30;
       setRemindersEnabled(enabled);
       setReminderMinutes(minutes);
-      reminderSettingsLoadedRef.current = true;
+      setReminderSettingsLoaded(true);
       const lastResponse = await Notifications.getLastNotificationResponseAsync();
       if (lastResponse) {
         handleNotificationResponse(lastResponse);
@@ -611,42 +713,29 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    if (Platform.OS === "web" || !reminderSettingsLoadedRef.current) return;
-    if (!remindersEnabled) return;
+    if (Platform.OS === "web" || !reminderSettingsLoaded) return;
+    if (!remindersEnabled) {
+      void queuePrayerReminderSync(false, reminderMinutes, userLocation);
+      return;
+    }
     const jordanToday = getJordanCalendarDate(now);
     const locationKey = userLocation ? `${userLocation.lat.toFixed(3)},${userLocation.lng.toFixed(3)}` : "default";
     const scheduleKey = `${jordanToday.getFullYear()}-${jordanToday.getMonth()}-${jordanToday.getDate()}-${reminderMinutes}-${locationKey}`;
-    if (reminderScheduleKeyRef.current === scheduleKey || reminderSchedulingRef.current) return;
-    reminderSchedulingRef.current = true;
-    void schedulePrayerReminders(reminderMinutes, userLocation)
-      .then(() => {
-        reminderScheduleKeyRef.current = scheduleKey;
-      })
-      .catch((error) => {
-        console.warn("Prayer reminder scheduling failed; it will be retried.", error);
-      })
-      .finally(() => {
-        reminderSchedulingRef.current = false;
-      });
-  }, [now, remindersEnabled, reminderMinutes, userLocation]);
+    if (reminderScheduleKeyRef.current === scheduleKey) return;
+    void queuePrayerReminderSync(remindersEnabled, reminderMinutes, userLocation);
+  }, [now, remindersEnabled, reminderMinutes, userLocation, language, reminderSettingsLoaded, queuePrayerReminderSync]);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active" && remindersEnabled && !reminderSchedulingRef.current) {
+      if (state === "active") {
         reminderScheduleKeyRef.current = null;
-        reminderSchedulingRef.current = true;
-        void schedulePrayerReminders(reminderMinutes, userLocation)
-          .catch((error) => {
-            console.warn("Prayer reminder foreground refresh failed; it will be retried.", error);
-          })
-          .finally(() => {
-            reminderSchedulingRef.current = false;
-          });
+        setReminderScheduleError(null);
+        void queuePrayerReminderSync(remindersEnabled, reminderMinutes, userLocation);
       }
     });
     return () => subscription.remove();
-  }, [remindersEnabled, reminderMinutes, userLocation]);
+  }, [remindersEnabled, reminderMinutes, userLocation, language, queuePrayerReminderSync]);
 
   useEffect(() => {
     // Reset the cursor and accumulated server pages when the search/filter key changes.
@@ -1140,6 +1229,8 @@ export default function HomeScreen() {
               <View style={styles.reminderBox}>
                 <View style={styles.reminderHeader}><View><Text style={styles.reminderTitle}>{language === "ar" ? "تذكير الصلاة" : "Prayer reminder"}</Text><Text style={styles.reminderHint}>{language === "ar" ? "تنبيه محلي قبل الصلاة، ويمكنك اختيار نعم أو تأجيله" : "A local reminder before prayer; choose done or snooze"}</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: remindersEnabled }} onPress={() => void updatePrayerReminders(!remindersEnabled)} style={[styles.reminderSwitch, remindersEnabled && styles.reminderSwitchOn]}><View style={[styles.reminderKnob, remindersEnabled && styles.reminderKnobOn]} /></Pressable></View>
                 {remindersEnabled && <View style={styles.reminderMinutes}><Text style={styles.reminderMinutesLabel}>{language === "ar" ? "التنبيه قبل الصلاة بـ" : "Remind me"}</Text>{([15, 30, 45] as const).map((minutes) => <Pressable key={minutes} onPress={() => { setReminderMinutes(minutes); void updatePrayerReminders(true, minutes); }} style={[styles.minuteChip, reminderMinutes === minutes && styles.minuteChipActive]}><Text style={[styles.minuteChipText, reminderMinutes === minutes && styles.minuteChipTextActive]}>{minutes} {language === "ar" ? "دقيقة" : "min"}</Text></Pressable>)}</View>}
+                {reminderScheduleError && <Text style={styles.reminderError}>{reminderScheduleError}</Text>}
+                {remindersEnabled && Platform.OS === "android" && Number(Platform.Version) >= 31 && <View style={styles.exactAlarmHelp}><Text style={styles.reminderHint}>{language === "ar" ? "قد يؤخر Android التذكير إذا لم تسمح لمحرابي بالتنبيهات الدقيقة. فعّل الإذن من إعدادات النظام." : "Android may delay reminders unless Mehrabi is allowed to schedule exact alarms. Enable it in system settings."}</Text><Pressable onPress={() => void openExactAlarmSettings()} accessibilityRole="button"><Text style={styles.authLinkText}>{language === "ar" ? "ضبط التنبيهات الدقيقة" : "Set exact alarms"}</Text></Pressable></View>}
               </View>
               <View style={styles.legalLinks}><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/privacy" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "سياسة الخصوصية" : "Privacy policy"}</Text></Pressable><Text style={styles.legalSeparator}>•</Text><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/terms" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "شروط الاستخدام" : "Terms of use"}</Text></Pressable></View>
               {meQuery.data && <Pressable style={styles.secondaryModalButton} onPress={signOut}><Text style={styles.secondaryModalText}>{ui.logout}</Text></Pressable>}
@@ -1454,6 +1545,8 @@ const styles = StyleSheet.create({
   reminderHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 10 },
   reminderTitle: { color: COLORS.navy, fontSize: 13, fontWeight: "900", textAlign: "right" },
   reminderHint: { color: COLORS.muted, fontSize: 10, lineHeight: 16, textAlign: "right", marginTop: 3, maxWidth: 230 },
+  reminderError: { color: COLORS.red, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
+  exactAlarmHelp: { borderTopWidth: 1, borderTopColor: COLORS.line, marginTop: 9, paddingTop: 7 },
   reminderSwitch: { width: 46, height: 27, borderRadius: 14, backgroundColor: "#C8D4DC", padding: 3, justifyContent: "center" },
   reminderSwitchOn: { backgroundColor: COLORS.green },
   reminderKnob: { width: 21, height: 21, borderRadius: 11, backgroundColor: COLORS.white },

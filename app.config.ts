@@ -55,7 +55,7 @@ const config: ExpoConfig & { logoUrl: string } = {
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664032199208/lHznBaREXRXrJYDO.png",
   name: env.appName,
   slug: env.appSlug,
-  version: "1.0.14",
+  version: "1.0.15",
 
   extra: {
     ...publicRuntime,
@@ -78,7 +78,7 @@ const config: ExpoConfig & { logoUrl: string } = {
   },
 
   android: {
-    versionCode: 10014,
+    versionCode: 10015,
     adaptiveIcon: {
       backgroundColor: "#102D4A",
       foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -87,7 +87,7 @@ const config: ExpoConfig & { logoUrl: string } = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    permissions: ["POST_NOTIFICATIONS"],
+    permissions: ["POST_NOTIFICATIONS", "SCHEDULE_EXACT_ALARM"],
     intentFilters: [
       {
         action: "VIEW",
