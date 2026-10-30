@@ -1,4 +1,4 @@
-export const PRAYER_REMINDER_DAYS = 7;
+export const PRAYER_REMINDER_DAYS = 10;
 
 const PRAYER_ORDER = ["الفجر", "الظهر", "العصر", "المغرب", "العشاء"] as const;
 
@@ -12,3 +12,6 @@ export const getPreviousPrayerName = (currentPrayer: string, scheduledPrayerName
 
 export const buildPrayerReminderBody = (minutesBefore: number, prayerName: string, scheduledPrayerNames: string[]) =>
   `باقي ${minutesBefore} دقيقة على صلاة ${prayerName} — استعد للصلاة. هل صلّيت صلاة ${getPreviousPrayerName(prayerName, scheduledPrayerNames)}؟`;
+
+export const getPrayerReminderIdentifier = (year: number, month: number, day: number, prayerIndex: number) =>
+  `mehrabi-prayer-${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}-${prayerIndex}`;

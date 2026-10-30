@@ -1,10 +1,11 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { CalculationMethod, Coordinates, Madhab, PrayerTimes } from "adhan";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import * as IntentLauncher from "expo-intent-launcher";
+import Constants from "expo-constants";
 import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   AppState,
@@ -15,7 +16,6 @@ import {
   Pressable,
   ScrollView,
   Share,
-  StyleSheet,
   Text,
   TextInput,
   View,
@@ -23,31 +23,15 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import OsmMapFrame from "@/components/OsmMapFrame";
-import osmMosqueMapData from "../../data/osm_mosque_map_points.json";
 import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
-import { buildPrayerReminderBody, PRAYER_REMINDER_DAYS } from "@/lib/prayerReminders";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { buildMapLocationCandidates, rankMapLocationsByDistance } from "@/lib/mapLocations";
-
-const COLORS = {
-  navy: "#102D4A",
-  navySoft: "#173B5E",
-  ink: "#122033",
-  muted: "#788595",
-  line: "#E7EDF2",
-  canvas: "#F7F9FA",
-  white: "#FFFFFF",
-  teal: "#5AAFA7",
-  gold: "#F3B44B",
-  goldSoft: "#FFF2D8",
-  green: "#2B9A76",
-  red: "#D46C66",
-  mosqueGreen: "#2B9A76",
-  musallaBlue: "#7C8EDB",
-  musallaSoft: "#EEF0FF",
-};
+import { createOsmHtml, createPickerHtml, EMPTY_COMMUNITY_MAP_POINTS, EMPTY_OFFICIAL_MAP_POINTS, OSM_COPYRIGHT_URL, OSM_MAP_FEATURES } from "@/lib/osmMapHtml";
+import { bearingToKaaba, distanceToKaabaKm, formatClock, formatCountdown, getDynamicGreeting, getJordanCalendarDate, getPrayerSchedule, localizePrayerName } from "@/lib/prayerTimes";
+import { clearPrayerReminderSchedule, configurePrayerNotifications, schedulePrayerReminders } from "@/lib/prayerReminderNotifications";
+import { COLORS, styles } from "@/components/home/mehrabiStyles";
 
 type Place = {
   id: string;
@@ -80,349 +64,14 @@ const formatDistance = (from: { lat: number; lng: number } | null, to: { lat: nu
   return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} م` : `${distanceKm.toFixed(1)} كم`;
 };
 
-const JORDAN_TIME_ZONE = "Asia/Amman";
 const REMINDER_SETTINGS_KEY = "maslay.prayer-reminders.v1";
-const REMINDER_IDS_KEY = "maslay.prayer-reminder-ids.v1";
 const PLACES_CACHE_KEY = "maslay.places-cache.v1";
-const PRAYER_REMINDER_CHANNEL = "prayer-reminders-v3";
-const PRAYER_REMINDER_SOUND = "mehrabi_reminder.wav";
 
-if (Notifications.setNotificationHandler) {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
-  });
-}
 
-const configurePrayerNotifications = async () => {
-  if (Platform.OS === "web") return false;
-  const permission = await Notifications.getPermissionsAsync();
-  if (!permission.granted) {
-    const requested = await Notifications.requestPermissionsAsync();
-    if (!requested.granted) return false;
-  }
-  if (Platform.OS === "android") {
-    await Notifications.setNotificationChannelAsync(PRAYER_REMINDER_CHANNEL, {
-      name: "تذكيرات الصلاة مع صوت",
-      importance: Notifications.AndroidImportance.DEFAULT,
-      vibrationPattern: [0, 250, 250, 250],
-      sound: PRAYER_REMINDER_SOUND,
-    });
-  }
-  return true;
-};
 
-const clearPrayerReminderSchedule = async () => {
-  // Cancel only prayer-time reminders. Deferred ten-minute reminders must
-  // survive the foreground reschedule triggered when an action opens the app.
-  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  await Promise.all(scheduled
-    .filter((item) => item.trigger && (item.content.data as { prayerReminder?: boolean } | undefined)?.prayerReminder)
-    .map((item) => Notifications.cancelScheduledNotificationAsync(item.identifier)));
-  const stored = await AsyncStorage.getItem(REMINDER_IDS_KEY);
-  if (!stored) return;
-  const ids = JSON.parse(stored) as string[];
-  await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
-  await AsyncStorage.removeItem(REMINDER_IDS_KEY);
-};
 
-const schedulePrayerReminders = async (minutesBefore: number, location: { lat: number; lng: number } | null) => {
-  if (Platform.OS === "web") return;
-  const ids: string[] = [];
-  try {
-    await clearPrayerReminderSchedule();
-    const now = new Date();
-    const scheduledKeys = new Set<string>();
-    const firstJordanDate = getJordanCalendarDate(now);
-    for (let dayOffset = 0; dayOffset < PRAYER_REMINDER_DAYS; dayOffset += 1) {
-      const date = new Date(firstJordanDate.getTime());
-      date.setDate(date.getDate() + dayOffset);
-      const prayerSchedule = getPrayerSchedule(date, location);
-      const scheduledPrayerNames = prayerSchedule.map(([name]) => name);
-      for (const [name, prayerTime] of prayerSchedule) {
-        const triggerDate = new Date(prayerTime.getTime() - minutesBefore * 60 * 1000);
-        if (triggerDate <= now) continue;
-        const reminderKey = `${name}:${triggerDate.getTime()}`;
-        if (scheduledKeys.has(reminderKey)) continue;
-        scheduledKeys.add(reminderKey);
-        const id = await Notifications.scheduleNotificationAsync({
-          content: {
-            title: "نداء محرابي",
-            body: buildPrayerReminderBody(minutesBefore, name, scheduledPrayerNames),
-            sound: PRAYER_REMINDER_SOUND,
-            data: { prayerName: name, reminderKey, prayerReminder: true },
-          },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate, channelId: PRAYER_REMINDER_CHANNEL },
-        });
-        ids.push(id);
-      }
-    }
-    await AsyncStorage.setItem(REMINDER_IDS_KEY, JSON.stringify(ids));
-  } catch (error) {
-    await Promise.all(ids.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined)));
-    await AsyncStorage.removeItem(REMINDER_IDS_KEY).catch(() => undefined);
-    throw error;
-  }
-};
 
-const getJordanCalendarDate = (value: Date) => {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: JORDAN_TIME_ZONE,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-  }).formatToParts(value);
-  const getPart = (type: "year" | "month" | "day") => Number(parts.find((part) => part.type === type)?.value);
-  // Use midday to avoid an edge case where timezone conversion crosses midnight
-  // while adhan is constructing the day's solar calculations.
-  return new Date(getPart("year"), getPart("month") - 1, getPart("day"), 12, 0, 0, 0);
-};
 
-const getPrayerSchedule = (now: Date, location: { lat: number; lng: number } | null) => {
-  // Jordan calibration: the Ministry of Awqaf timetable is closest to the
-  // Karachi angles, with local minute adjustments for Amman/Jordan.
-  const params = CalculationMethod.Karachi();
-  params.madhab = Madhab.Shafi;
-  params.adjustments = { fajr: 0, sunrise: 0, dhuhr: -1, asr: 1, maghrib: 6, isha: 0 };
-  const jordanDate = getJordanCalendarDate(now);
-  const times = new PrayerTimes(new Coordinates(location?.lat ?? 31.9539, location?.lng ?? 35.9106), jordanDate, params);
-  return [
-    ["الفجر", times.fajr],
-    [jordanDate.getDay() === 5 ? "الجمعة" : "الظهر", times.dhuhr],
-    ["العصر", times.asr],
-    ["المغرب", times.maghrib],
-    ["العشاء", times.isha],
-  ] as const;
-};
-
-const formatClock = (date: Date, language: "ar" | "en") =>
-  date.toLocaleTimeString(language === "ar" ? "ar-JO" : "en-US", { hour: "numeric", minute: "2-digit", timeZone: JORDAN_TIME_ZONE });
-
-const localizePrayerName = (name: string, language: "ar" | "en") => {
-  if (language === "ar") return name;
-  return ({ الفجر: "Fajr", الظهر: "Dhuhr", الجمعة: "Jumu'ah", العصر: "Asr", المغرب: "Maghrib", العشاء: "Isha" } as Record<string, string>)[name] ?? name;
-};
-
-const getDynamicGreeting = (date: Date, language: "ar" | "en") => {
-  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: JORDAN_TIME_ZONE, hour: "numeric", hour12: false }).format(date));
-  if (language === "ar") return hour < 12 ? "صباح النور" : hour < 18 ? "مساء الخير" : "ليلة هادئة";
-  return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-};
-
-const formatCountdown = (target: Date, now: Date) => {
-  const seconds = Math.max(0, Math.floor((target.getTime() - now.getTime()) / 1000));
-  const hours = Math.floor(seconds / 3600).toString().padStart(2, "0");
-  const minutes = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
-  const rest = (seconds % 60).toString().padStart(2, "0");
-  return `${hours}:${minutes}:${rest}`;
-};
-
-const bearingToKaaba = (latitude: number, longitude: number) => {
-  const targetLat = (21.4225 * Math.PI) / 180;
-  const currentLat = (latitude * Math.PI) / 180;
-  const deltaLong = ((39.8262 - longitude) * Math.PI) / 180;
-  const bearing = (Math.atan2(Math.sin(deltaLong), Math.cos(currentLat) * Math.tan(targetLat) - Math.sin(currentLat) * Math.cos(deltaLong)) * 180) / Math.PI;
-  return (bearing + 360) % 360;
-};
-
-const distanceToKaabaKm = (latitude: number, longitude: number) => {
-  const earthRadiusKm = 6371;
-  const lat1 = (latitude * Math.PI) / 180;
-  const lat2 = (21.4225 * Math.PI) / 180;
-  const dLat = lat2 - lat1;
-  const dLng = ((39.8262 - longitude) * Math.PI) / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-type OfficialMosqueMapPoint = { id: number; name: string; latitude: number; longitude: number };
-type CommunityMapPoint = { id: number; name: string; type: string; latitude: number; longitude: number };
-const EMPTY_OFFICIAL_MAP_POINTS: OfficialMosqueMapPoint[] = [];
-const EMPTY_COMMUNITY_MAP_POINTS: CommunityMapPoint[] = [];
-type OsmMapFeature = {
-  osmType: "node" | "way" | "relation";
-  osmId: number;
-  osmUrl: string;
-  kind: "mosque" | "musalla";
-  osmName: string | null;
-  alternateNames: string[];
-  latitude: number;
-  longitude: number;
-  geometryMethod: string;
-  officialMatch: {
-    sourceKey: string;
-    officialName: string;
-    officialHasCoordinates: boolean;
-    matchMethod: string;
-  } | null;
-};
-
-const OSM_MAP_FEATURES = osmMosqueMapData.features as OsmMapFeature[];
-const OSM_COPYRIGHT_URL = "https://www.openstreetmap.org/copyright";
-
-const safeInlineJson = (value: unknown) =>
-  (JSON.stringify(value) ?? "null")
-  .replace(/</g, "\\u003c")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
-
-const createOsmHtml = (
-  places: CommunityMapPoint[],
-  officialMosques: OfficialMosqueMapPoint[],
-  userLocation: { lat: number; lng: number } | null,
-  language: "ar" | "en",
-  officialMosquesLoaded: boolean,
-  placeTypeFilter: "all" | "mosque" | "musalla",
-  searchQuery: string,
-  mapFocusLocation: { lat: number; lng: number } | null,
-) => {
-  const communityPoints = safeInlineJson(places.map(({ latitude, longitude, name, type }) => [latitude, longitude, name, type]));
-  const officialPoints = safeInlineJson(officialMosques.map(({ id, name, latitude, longitude }) => ({ id, name, latitude, longitude })));
-  const osmPoints = safeInlineJson(OSM_MAP_FEATURES.map((feature) => ({
-    osmType: feature.osmType,
-    osmId: feature.osmId,
-    osmUrl: feature.osmUrl,
-    kind: feature.kind,
-    osmName: feature.osmName,
-    alternateNames: feature.alternateNames,
-    latitude: feature.latitude,
-    longitude: feature.longitude,
-    officialMatch: feature.officialMatch,
-  })));
-  const currentLocation = safeInlineJson(userLocation);
-  const mapViewCenter = safeInlineJson(mapFocusLocation ?? userLocation);
-
-  return `<!doctype html>
-<html lang="${language}">
-  <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="referrer" content="strict-origin" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
-    <style>html,body,#map{width:100%;height:100%;margin:0;background:#e3efef}.leaflet-control-attribution{font-size:8px}.leaflet-popup-content{line-height:1.45}.leaflet-popup-content a{display:block;margin-top:4px}</style>
-  </head>
-  <body>
-    <div id="map"></div>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
-    <script>
-      const mapViewCenter = ${mapViewCenter};
-      const map = L.map('map', { zoomControl: false, preferCanvas: true }).setView(mapViewCenter ? [Number(mapViewCenter.lat), Number(mapViewCenter.lng)] : [31.9539, 35.9106], ${mapFocusLocation ? 14 : userLocation ? 13 : 9});
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' }).addTo(map);
-      const communityPoints = ${communityPoints};
-      const officialMosques = ${officialPoints};
-      const osmFeatures = ${osmPoints};
-      const userLocation = ${currentLocation};
-      const officialMosquesLoaded = ${officialMosquesLoaded ? "true" : "false"};
-      const mapTypeFilter = ${safeInlineJson(placeTypeFilter)};
-      const mapSearchQuery = ${safeInlineJson(searchQuery.trim().toLocaleLowerCase())};
-      const markerRenderer = L.canvas({ padding: 0.5 });
-
-      function shouldShowMarker(name, isMosque, alternateNames = []) {
-        if (mapTypeFilter === 'mosque' && !isMosque) return false;
-        if (mapTypeFilter === 'musalla' && isMosque) return false;
-        if (!mapSearchQuery) return true;
-        const searchableName = [name, ...alternateNames].filter(Boolean).join(' ').toLocaleLowerCase();
-        return searchableName.includes(mapSearchQuery);
-      }
-
-      function isValidOsmUrl(value) {
-        const prefix = 'https://www.openstreetmap.org/';
-        const url = String(value || '');
-        if (!url.startsWith(prefix)) return false;
-        const parts = url.slice(prefix.length).split('/');
-        return parts.length === 2
-          && ['node', 'way', 'relation'].includes(parts[0])
-          && parts[1].length > 0
-          && Array.from(parts[1]).every((digit) => digit >= '0' && digit <= '9');
-      }
-
-      function popupContent(name, category, source, osmUrl) {
-        const content = document.createElement('div');
-        content.dir = "${language}" === 'ar' ? 'rtl' : 'ltr';
-        const title = document.createElement('strong');
-        title.textContent = String(name ?? '');
-        const detail = document.createElement('div');
-        detail.textContent = category;
-        const sourceLine = document.createElement('div');
-        sourceLine.textContent = source;
-        content.appendChild(title);
-        content.appendChild(detail);
-        content.appendChild(sourceLine);
-        if (isValidOsmUrl(osmUrl)) {
-          const link = document.createElement('a');
-          link.href = osmUrl;
-          link.textContent = "${language}" === 'ar' ? 'فتح عنصر OSM' : 'Open OSM element';
-          link.addEventListener('click', (event) => {
-            event.preventDefault();
-            if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
-              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'open-osm-link', url: link.href }));
-            } else {
-              window.open(link.href, '_blank', 'noopener,noreferrer');
-            }
-          });
-          content.appendChild(link);
-        }
-        return content;
-      }
-
-      function addMarker(lat, lng, color, name, category, source, osmUrl, radius = 5) {
-        const latitude = Number(lat);
-        const longitude = Number(lng);
-        if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return;
-        const position = [latitude, longitude];
-        L.circleMarker(position, { renderer: markerRenderer, radius, color: '#fff', weight: 1.25, fillColor: color, fillOpacity: 0.92 })
-          .addTo(map)
-          .bindPopup(popupContent(name, category, source, osmUrl));
-      }
-
-      communityPoints.forEach(([lat, lng, name, type]) => {
-        const isMosque = type === 'مسجد' || type === 'mosque';
-        if (!shouldShowMarker(name, isMosque)) return;
-        const category = isMosque ? ("${language}" === 'ar' ? 'مسجد' : 'Mosque') : ("${language}" === 'ar' ? 'مصلى' : 'Musalla');
-        const source = "${language}" === 'ar' ? 'مكان معتمد في التطبيق' : 'Approved place in the app';
-        addMarker(lat, lng, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, null, 5.5);
-      });
-
-      officialMosques.forEach(({ name, latitude, longitude }) => {
-        if (!shouldShowMarker(name, true)) return;
-        addMarker(latitude, longitude, '#2B9A76', name, "${language}" === 'ar' ? 'جامع رسمي' : 'Official mosque', "${language}" === 'ar' ? 'إحداثيات سجل وزارة الأوقاف' : 'Ministry registry coordinates', null, 6);
-      });
-
-      osmFeatures.forEach((feature) => {
-        const officialMatch = feature.officialMatch;
-        if (officialMatch?.officialHasCoordinates && officialMosquesLoaded) return;
-        const matchedMissingCoordinates = Boolean(officialMatch && !officialMatch.officialHasCoordinates);
-        const isMosque = feature.kind === 'mosque';
-        const fallbackName = isMosque
-          ? ("${language}" === 'ar' ? 'مسجد غير مسمّى من OSM' : 'Unnamed mosque from OSM')
-          : ("${language}" === 'ar' ? 'مصلى غير مسمّى من OSM' : 'Unnamed musalla from OSM');
-        const name = officialMatch?.officialName || feature.osmName || fallbackName;
-        if (!shouldShowMarker(name, isMosque, [feature.osmName, ...(feature.alternateNames || []), officialMatch?.officialName])) return;
-        const category = matchedMissingCoordinates
-          ? ("${language}" === 'ar' ? 'جامع رسمي — موقعه من OSM' : 'Official mosque — location from OSM')
-          : (isMosque ? ("${language}" === 'ar' ? 'جامع من OpenStreetMap' : 'Mosque from OpenStreetMap') : ("${language}" === 'ar' ? 'مصلى من OpenStreetMap' : 'Musalla from OpenStreetMap'));
-        const source = matchedMissingCoordinates
-          ? ("${language}" === 'ar' ? 'اسم وزارة الأوقاف؛ الإحداثيات من OSM' : 'Ministry name; coordinates from OSM')
-          : ("${language}" === 'ar' ? 'معلم OSM غير مربوط بثقة بسجل الوزارة' : 'OSM feature not confidently linked to a Ministry record');
-        addMarker(feature.latitude, feature.longitude, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, feature.osmUrl, 5);
-      });
-
-      if (userLocation) {
-          const latitude = Number(userLocation.lat);
-          const longitude = Number(userLocation.lng);
-          if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-            const position = [latitude, longitude];
-            L.circleMarker(position, { renderer: markerRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#4A94F5', fillOpacity: 0.92 })
-            .addTo(map)
-            .bindPopup("${language}" === 'ar' ? 'موقعك الحالي' : 'Your location');
-        }
-      }
-
-      setTimeout(() => map.invalidateSize(), 80);
-    </script>
-  </body>
-</html>`;
-};
-
-const createPickerHtml = (location: { lat: number; lng: number }) => `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/><style>html,body,#map{height:100%;margin:0}</style></head><body><div id="map"></div><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>const map=L.map('map').setView([${location.lat},${location.lng}],16);L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);let marker=L.marker([${location.lat},${location.lng}]).addTo(map);map.on('click',e=>{marker.setLatLng(e.latlng);window.ReactNativeWebView.postMessage(JSON.stringify({lat:e.latlng.lat,lng:e.latlng.lng}))});</script></body></html>`;
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -476,9 +125,11 @@ export default function HomeScreen() {
   const [emailAuthOtp, setEmailAuthOtp] = useState("");
   const [remindersEnabled, setRemindersEnabled] = useState(false);
   const [reminderMinutes, setReminderMinutes] = useState<15 | 30 | 45>(30);
-  const reminderSettingsLoadedRef = useRef(false);
+  const [reminderScheduleError, setReminderScheduleError] = useState<string | null>(null);
+  const [reminderSettingsLoaded, setReminderSettingsLoaded] = useState(false);
   const reminderScheduleKeyRef = useRef<string | null>(null);
-  const reminderSchedulingRef = useRef(false);
+  const reminderSyncGenerationRef = useRef(0);
+  const reminderSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
   const ui = language === "ar" ? {
     greeting: "صباح الخير ✦", title: "وين ناوي تصلي اليوم؟", useLocation: "استخدم موقعي", located: "تم تحديد موقعك",
     nextPrayer: "الصلاة القادمة ✦", today: "اليوم", remaining: "متبقي", prayerTimes: "مواقيت اليوم", guide: "دليلك في الطريق",
@@ -490,6 +141,14 @@ export default function HomeScreen() {
     nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
     go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", logout: "Sign out", emailLogin: "Sign in", emailRegister: "Create account", email: "Email", phone: "Phone number", identifier: "Email or phone number", password: "Password", name: "Full name", forgotPassword: "Forgot password?", sendReset: "Send reset link", resendVerification: "Resend code", createAccount: "Create account", haveAccount: "Already have an account? Sign in", backToLogin: "Back to sign in", verifyHint: "Check your inbox and enter the 6-digit code before signing in.", resetSent: "If this email is registered, you will receive a reset link shortly.", verifySent: "Account created. Check your inbox and enter the code.", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
   };
+  const filterOptions = [
+    { key: "nearest", label: ui.nearest, icon: "navigate-outline" },
+    { key: "open", label: ui.open, icon: "time-outline" },
+    { key: "ablution", label: ui.ablution, icon: "water-outline" },
+    { key: "women", label: ui.women, icon: "people-outline" },
+    { key: "favorites", label: language === "ar" ? "المفضلة" : "Favorites", icon: "heart-outline" },
+  ] as const;
+  const activeFilterLabel = filterOptions.find((option) => option.key === activeFilter)?.label ?? ui.nearest;
   const serverPlaceFilters = {
     search: query.trim() || undefined,
     openNow: activeFilter === "open" ? true : undefined,
@@ -551,9 +210,6 @@ export default function HomeScreen() {
       status: location.status,
     }));
   }, [mapLocationCandidates, userLocation]);
-  const nearestMosque = userLocation
-    ? sourcePlaces.find((place) => place.type === "مسجد" && (!query.trim() || [place.name, ...(place.alternateNames ?? [])].some((name) => name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())))) ?? null
-    : null;
   const mapHtml = useMemo(
     () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation),
     [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation],
@@ -564,20 +220,78 @@ export default function HomeScreen() {
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
 
+  const queuePrayerReminderSync = useCallback((enabled: boolean, minutes: number, location: { lat: number; lng: number } | null) => {
+    const jordanToday = getJordanCalendarDate(new Date());
+    const locationKey = location ? `${location.lat.toFixed(3)},${location.lng.toFixed(3)}` : "default";
+    const scheduleKey = enabled
+      ? `${jordanToday.getFullYear()}-${jordanToday.getMonth()}-${jordanToday.getDate()}-${minutes}-${locationKey}`
+      : "disabled";
+    if (reminderScheduleKeyRef.current === scheduleKey) return reminderSyncQueueRef.current;
+    const generation = ++reminderSyncGenerationRef.current;
+    reminderScheduleKeyRef.current = scheduleKey;
+    reminderSyncQueueRef.current = reminderSyncQueueRef.current.catch(() => undefined).then(async () => {
+      if (generation !== reminderSyncGenerationRef.current) return;
+      try {
+        if (!enabled) {
+          await clearPrayerReminderSchedule();
+          if (generation === reminderSyncGenerationRef.current) {
+            reminderScheduleKeyRef.current = "disabled";
+            setReminderScheduleError(null);
+          }
+          return;
+        }
+        setReminderScheduleError(null);
+        await schedulePrayerReminders(minutes, location, () => generation === reminderSyncGenerationRef.current);
+        if (generation === reminderSyncGenerationRef.current) {
+          reminderScheduleKeyRef.current = scheduleKey;
+          setReminderScheduleError(null);
+        }
+      } catch (error) {
+        console.warn("Prayer reminder synchronization failed; it will be retried.", error);
+        if (generation === reminderSyncGenerationRef.current) {
+          if (!enabled) reminderScheduleKeyRef.current = null;
+          setReminderScheduleError(language === "ar" ? "تعذرت مزامنة التذكيرات. سيحاول التطبيق مجددًا عند فتحه." : "Could not synchronize reminders. The app will retry when reopened.");
+        }
+      }
+    });
+    return reminderSyncQueueRef.current;
+  }, [language]);
+
   const updatePrayerReminders = async (enabled: boolean, minutes = reminderMinutes) => {
     if (enabled) {
-      const ready = await configurePrayerNotifications();
+      let ready = false;
+      try {
+        ready = await configurePrayerNotifications();
+      } catch {
+        ready = false;
+      }
       if (!ready) {
         Alert.alert(language === "ar" ? "التنبيهات غير مفعّلة" : "Notifications are disabled", language === "ar" ? "اسمح للتطبيق بالتنبيهات من إعدادات الهاتف." : "Allow notifications in your phone settings.");
         return;
       }
-    } else if (Platform.OS !== "web") {
-      await clearPrayerReminderSchedule();
-      reminderScheduleKeyRef.current = null;
     }
     setReminderMinutes(minutes as 15 | 30 | 45);
+    setReminderScheduleError(null);
     setRemindersEnabled(enabled);
     await AsyncStorage.setItem(REMINDER_SETTINGS_KEY, JSON.stringify({ enabled, minutes }));
+    if (Platform.OS !== "web") await queuePrayerReminderSync(enabled, minutes, userLocation);
+  };
+
+  const openExactAlarmSettings = async () => {
+    try {
+      const packageName = Constants.expoConfig?.android?.package;
+      if (!packageName) throw new Error("Android package name is unavailable");
+      await IntentLauncher.startActivityAsync(IntentLauncher.ActivityAction.REQUEST_SCHEDULE_EXACT_ALARM, {
+        data: `package:${packageName}`,
+      });
+      reminderScheduleKeyRef.current = null;
+      await queuePrayerReminderSync(true, reminderMinutes, userLocation);
+    } catch {
+      Alert.alert(
+        language === "ar" ? "تعذر فتح إعداد الدقة" : "Could not open exact-alarm settings",
+        language === "ar" ? "افتح إعدادات الهاتف > التطبيقات > محرابي > التنبيهات والمنبهات، ثم اسمح بالتنبيهات الدقيقة." : "Open Settings > Apps > Mehrabi > Alarms & reminders, then allow exact alarms.",
+      );
+    }
   };
 
   useEffect(() => {
@@ -594,7 +308,7 @@ export default function HomeScreen() {
       const minutes = settings?.minutes === 15 || settings?.minutes === 45 ? settings.minutes : 30;
       setRemindersEnabled(enabled);
       setReminderMinutes(minutes);
-      reminderSettingsLoadedRef.current = true;
+      setReminderSettingsLoaded(true);
       const lastResponse = await Notifications.getLastNotificationResponseAsync();
       if (lastResponse) {
         handleNotificationResponse(lastResponse);
@@ -606,42 +320,29 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    if (Platform.OS === "web" || !reminderSettingsLoadedRef.current) return;
-    if (!remindersEnabled) return;
+    if (Platform.OS === "web" || !reminderSettingsLoaded) return;
+    if (!remindersEnabled) {
+      void queuePrayerReminderSync(false, reminderMinutes, userLocation);
+      return;
+    }
     const jordanToday = getJordanCalendarDate(now);
     const locationKey = userLocation ? `${userLocation.lat.toFixed(3)},${userLocation.lng.toFixed(3)}` : "default";
     const scheduleKey = `${jordanToday.getFullYear()}-${jordanToday.getMonth()}-${jordanToday.getDate()}-${reminderMinutes}-${locationKey}`;
-    if (reminderScheduleKeyRef.current === scheduleKey || reminderSchedulingRef.current) return;
-    reminderSchedulingRef.current = true;
-    void schedulePrayerReminders(reminderMinutes, userLocation)
-      .then(() => {
-        reminderScheduleKeyRef.current = scheduleKey;
-      })
-      .catch((error) => {
-        console.warn("Prayer reminder scheduling failed; it will be retried.", error);
-      })
-      .finally(() => {
-        reminderSchedulingRef.current = false;
-      });
-  }, [now, remindersEnabled, reminderMinutes, userLocation]);
+    if (reminderScheduleKeyRef.current === scheduleKey) return;
+    void queuePrayerReminderSync(remindersEnabled, reminderMinutes, userLocation);
+  }, [now, remindersEnabled, reminderMinutes, userLocation, language, reminderSettingsLoaded, queuePrayerReminderSync]);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active" && remindersEnabled && !reminderSchedulingRef.current) {
+      if (state === "active") {
         reminderScheduleKeyRef.current = null;
-        reminderSchedulingRef.current = true;
-        void schedulePrayerReminders(reminderMinutes, userLocation)
-          .catch((error) => {
-            console.warn("Prayer reminder foreground refresh failed; it will be retried.", error);
-          })
-          .finally(() => {
-            reminderSchedulingRef.current = false;
-          });
+        setReminderScheduleError(null);
+        void queuePrayerReminderSync(remindersEnabled, reminderMinutes, userLocation);
       }
     });
     return () => subscription.remove();
-  }, [remindersEnabled, reminderMinutes, userLocation]);
+  }, [remindersEnabled, reminderMinutes, userLocation, language, queuePrayerReminderSync]);
 
   useEffect(() => {
     // Reset the cursor and accumulated server pages when the search/filter key changes.
@@ -1014,19 +715,6 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <View style={styles.quickActions}>
-          <Pressable style={styles.quickAction} onPress={() => void openQibla()}>
-            <View style={[styles.quickIcon, styles.quickIconGold]}><MaterialCommunityIcons name="compass-rose" size={21} color={COLORS.navy} /></View>
-            <Text style={styles.quickActionText}>{ui.qibla}</Text>
-            <Text style={styles.quickActionHint}>{language === "ar" ? "اتجاه دقيق" : "Accurate bearing"}</Text>
-          </Pressable>
-          <Pressable style={styles.quickAction} onPress={openAddPlace}>
-            <View style={[styles.quickIcon, styles.quickIconBlue]}><Ionicons name="add" size={22} color={COLORS.navy} /></View>
-            <Text style={styles.quickActionText}>{ui.add}</Text>
-            <Text style={styles.quickActionHint}>{language === "ar" ? "شارك الخير" : "Add a place"}</Text>
-          </Pressable>
-        </View>
-
         <View style={styles.sectionHeader}>
           <View>
             <Text style={styles.sectionEyebrow}>{ui.guide}</Text>
@@ -1035,14 +723,10 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.discoveryCard}>
-          <View style={styles.discoveryTitleRow}>
-            <View style={styles.discoveryIcon}><Ionicons name="sparkles-outline" size={18} color={COLORS.gold} /></View>
-            <View style={styles.discoveryCopy}><Text style={styles.discoveryEyebrow}>{language === "ar" ? "اعثر على مكان صلاتك" : "Find your prayer place"}</Text><Text style={styles.discoveryTitle}>{language === "ar" ? "أين ستصلي اليوم؟" : "Where will you pray today?"}</Text></View>
-          </View>
           <View style={styles.searchBox}>
             <Ionicons name="search-outline" size={19} color={COLORS.muted} />
-            <TextInput value={query} onChangeText={setQuery} placeholder={ui.search} placeholderTextColor="#9DA8B3" style={styles.searchInput} textAlign="right" />
-            {query.length > 0 ? <Pressable onPress={() => setQuery("")}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable> : <View style={styles.shortcut}><Text style={styles.shortcutText}>⌘ K</Text></View>}
+            <TextInput value={query} onChangeText={setQuery} placeholder={ui.search} placeholderTextColor="#9DA8B3" style={styles.searchInput} textAlign="right" accessibilityLabel={ui.search} returnKeyType="search" />
+            {query.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel={language === "ar" ? "مسح البحث" : "Clear search"} onPress={() => setQuery("")}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable>}
           </View>
           <View style={styles.typeSegmentRow}>
             {([{ key: "all", label: language === "ar" ? "الكل" : "All", icon: "map-outline" }, { key: "mosque", label: ui.mosques, icon: "mosque" }, { key: "musalla", label: ui.musallas, icon: "home-city-outline" }] as const).map((option) => {
@@ -1050,6 +734,11 @@ export default function HomeScreen() {
               return <Pressable key={option.key} onPress={() => setPlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
+          <Pressable style={styles.filterButton} onPress={() => setActiveTab("explore")} accessibilityRole="button">
+            <Ionicons name="options-outline" size={17} color={COLORS.navy} />
+            <Text style={styles.filterButtonText}>{language === "ar" ? "تصفية وترتيب" : "Filter & sort"}</Text>
+            <Text style={styles.filterButtonValue}>{activeFilterLabel}</Text>
+          </Pressable>
         </View>
 
         <View style={styles.mapCard}>
@@ -1058,34 +747,22 @@ export default function HomeScreen() {
           <Pressable style={styles.mapControl} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
           <View style={styles.mapLegend}><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.mosqueGreen }]} /><Text style={styles.legendText}>{ui.mosques}</Text></View><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.musallaBlue }]} /><Text style={styles.legendText}>{ui.musallas}</Text></View>{locationEnabled && <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendLocation]} /><Text style={styles.legendText}>{language === "ar" ? "موقعك" : "You"}</Text></View>}</View>
         </View>
-        <View style={styles.mapCoverage}>
-          <Text style={styles.mapCoverageText}>{language === "ar" ? "الأسماء الرسمية من وزارة الأوقاف؛ والإحداثيات المكمّلة من OpenStreetMap. اضغط العلامة لمعرفة مصدرها." : "Official names come from the Ministry; supplementary coordinates come from OpenStreetMap. Tap a marker to see its source."}</Text>
-          {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <Pressable onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable>}
+        {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <View style={styles.mapCoverage}><Pressable accessibilityRole="button" onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable></View>}
+        <View style={styles.quickActions}>
+          <Pressable style={styles.quickAction} onPress={() => void openQibla()} accessibilityRole="button">
+            <View style={[styles.quickIcon, styles.quickIconGold]}><MaterialCommunityIcons name="compass-rose" size={21} color={COLORS.navy} /></View>
+            <Text style={styles.quickActionText}>{ui.qibla}</Text>
+            <Text style={styles.quickActionHint}>{language === "ar" ? "اتجاه دقيق" : "Accurate bearing"}</Text>
+          </Pressable>
+          <Pressable style={styles.quickAction} onPress={openAddPlace} accessibilityRole="button">
+            <View style={[styles.quickIcon, styles.quickIconBlue]}><Ionicons name="add" size={22} color={COLORS.navy} /></View>
+            <Text style={styles.quickActionText}>{ui.add}</Text>
+            <Text style={styles.quickActionHint}>{language === "ar" ? "شارك الخير" : "Add a place"}</Text>
+          </Pressable>
         </View>
 
         {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
-        {nearestMosque ? (
-          <View style={styles.nearestMosqueCard}>
-            <View style={styles.nearestMosqueCopy}>
-              <Text style={styles.nearestMosqueLabel}>{language === "ar" ? "أقرب مسجد إلى موقعك" : "Nearest mosque to your location"}</Text>
-              <Text style={styles.nearestMosqueName}>{nearestMosque.name}</Text>
-              <Text style={styles.nearestMosqueMeta}>{nearestMosque.distance} {language === "ar" ? "خط مستقيم" : "straight-line distance"} · {language === "ar" ? nearestMosque.sourceLabelAr : nearestMosque.sourceLabelEn}</Text>
-            </View>
-            <Pressable style={styles.nearestMosqueAction} onPress={() => { setPlaceTypeFilter("mosque"); setMapFocusLocation({ lat: nearestMosque.lat, lng: nearestMosque.lng }); }}>
-              <Ionicons name="map-outline" size={17} color={COLORS.white} />
-              <Text style={styles.nearestMosqueActionText}>{language === "ar" ? "اعرضه" : "Show"}</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.nearestMosqueCard}>
-            <View style={styles.nearestMosqueCopy}>
-              <Text style={styles.nearestMosqueLabel}>{language === "ar" ? "أقرب مسجد" : "Nearest mosque"}</Text>
-              <Text style={styles.nearestMosqueName}>{userLocation ? (language === "ar" ? "لا توجد نتيجة مطابقة للبحث الحالي" : "No mosque matches this search") : (language === "ar" ? "حدّد موقعك لحساب الأقرب بدقة" : "Set your location to calculate the nearest mosque")}</Text>
-            </View>
-            {!userLocation && <Pressable style={styles.nearestMosqueAction} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate-outline" size={17} color={COLORS.white} /><Text style={styles.nearestMosqueActionText}>{language === "ar" ? "موقعي" : "Locate"}</Text></Pressable>}
-          </View>
-        )}
-        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text><Pressable onPress={() => setActiveFilter("nearest")}><Text style={styles.sortText}>{ui.nearest}</Text></Pressable></View>
+        <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text></View>
         {!userLocation && (
           <View style={styles.emptyPlacesNotice}>
             <Text style={styles.emptyPlacesNoticeText}>
@@ -1096,7 +773,7 @@ export default function HomeScreen() {
           </View>
         )}
         {userLocation && filteredPlaces.length === 0 && !placesQuery.isLoading && (
-          <View style={styles.emptyPlacesNotice}><Text style={styles.emptyPlacesNoticeText}>{language === "ar" ? "لا توجد مواقع تطابق البحث أو التصفية. جرّب «الكل» أو امسح البحث." : "No map locations match this search or filter. Try All or clear the search."}</Text></View>
+          <View style={styles.emptyPlacesNotice}><Text style={styles.emptyPlacesNoticeText}>{language === "ar" ? "لا توجد مواقع تطابق البحث أو التصفية. جرّب «الكل» أو امسح التصفية والبحث." : "No map locations match this search or filter. Try All or clear the filters and search."}</Text></View>
         )}
         {userLocation && nearestFivePlaces.map((place) => (
           <View key={place.id} style={[styles.placeCard, place.type === "مسجد" ? styles.mosqueCard : styles.musallaCard]}>
@@ -1125,12 +802,15 @@ export default function HomeScreen() {
           <View style={styles.modalCard}>
             <Pressable style={styles.modalClose} onPress={() => setActiveTab("home")}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
             {activeTab === "explore" && <>
-              <View style={styles.exploreHero}><View style={styles.exploreHeroIcon}><Ionicons name="compass-outline" size={25} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{language === "ar" ? "اكتشف أماكن الصلاة حولك" : "Discover prayer places nearby"}</Text><Text style={styles.modalHint}>{language === "ar" ? "ابحث عن أقرب مسجد أو مصلى يناسب احتياجك." : "Find the nearest mosque or musalla for your needs."}</Text></View>
-              <View style={styles.exploreTypeCards}>
-                <Pressable style={[styles.exploreTypeCard, styles.exploreMosqueCard]} onPress={() => { setPlaceTypeFilter("mosque"); setActiveFilter("nearest"); setMapFocusLocation(null); setActiveTab("home"); }}><View style={styles.exploreCardIcon}><MaterialCommunityIcons name="mosque" size={23} color={COLORS.mosqueGreen} /></View><Text style={styles.exploreCardTitle}>{ui.mosques}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "إظهار على الخريطة ←" : "Show on map →"}</Text></Pressable>
-                <Pressable style={[styles.exploreTypeCard, styles.exploreMusallaCard]} onPress={() => { setPlaceTypeFilter("musalla"); setActiveFilter("nearest"); setMapFocusLocation(null); setActiveTab("home"); }}><View style={[styles.exploreCardIcon, styles.exploreCardIconBlue]}><MaterialCommunityIcons name="home-city-outline" size={23} color={COLORS.musallaBlue} /></View><Text style={styles.exploreCardTitle}>{ui.musallas}</Text><Text style={styles.exploreCardAction}>{language === "ar" ? "إظهار على الخريطة ←" : "Show on map →"}</Text></Pressable>
+              <View style={styles.exploreHero}><View style={styles.exploreHeroIcon}><Ionicons name="options-outline" size={25} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{language === "ar" ? "تصفية وترتيب النتائج" : "Filter and sort results"}</Text><Text style={styles.modalHint}>{language === "ar" ? "اختر طريقة عرض النتائج؛ البحث ونوع المكان يطبّقان مباشرة على الخريطة." : "Choose how results are filtered; search and place type also filter the map."}</Text></View>
+              <View style={styles.exploreQuickGrid}>
+                {filterOptions.map((option) => {
+                  const selected = activeFilter === option.key;
+                  return <Pressable key={option.key} style={styles.exploreRow} onPress={() => { setActiveFilter(option.key); setPlaceOffset(0); setActiveTab("home"); }} accessibilityRole="button" accessibilityState={{ selected }}><View style={{ flexDirection: "row-reverse", alignItems: "center", gap: 9 }}><Ionicons name={option.icon} size={18} color={selected ? COLORS.green : COLORS.muted} /><Text style={styles.exploreRowText}>{option.label}</Text></View><Ionicons name={selected ? "checkmark-circle" : "chevron-back"} size={17} color={selected ? COLORS.green : COLORS.muted} /></Pressable>;
+                })}
               </View>
-              <View style={styles.exploreLocationNote}><Ionicons name={userLocation ? "checkmark-circle" : "location-outline"} size={17} color={userLocation ? COLORS.green : COLORS.gold} /><Text style={styles.exploreLocationText}>{userLocation ? (language === "ar" ? "النتائج القريبة مرتبة بمسافة مباشرة من GPS، والأسماء الرسمية من الوزارة." : "Nearby results use straight-line GPS distance; official names remain Ministry names.") : (language === "ar" ? "فعّل GPS لحساب أقرب مسجد؛ لا نعرض مسافات تقديرية." : "Enable GPS to calculate the nearest mosque; no estimated distances are shown.")}</Text></View>
+              <View style={styles.exploreLocationNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.gold} /><Text style={styles.exploreLocationText}>{language === "ar" ? "فلاتر الدوام والخدمات تعتمد على البيانات المتاحة، وقد لا تُظهر بعض المواقع في قائمة النتائج عند استخدامها." : "Hours and amenity filters depend on available data and may omit some places from the results list."}</Text></View>
+              <Pressable style={styles.secondaryModalButton} onPress={() => { setActiveFilter("nearest"); setPlaceTypeFilter("all"); setQuery(""); setPlaceOffset(0); setActiveTab("home"); }}><Text style={styles.secondaryModalText}>{language === "ar" ? "مسح البحث والفلاتر" : "Clear search and filters"}</Text></Pressable>
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
@@ -1156,6 +836,8 @@ export default function HomeScreen() {
               <View style={styles.reminderBox}>
                 <View style={styles.reminderHeader}><View><Text style={styles.reminderTitle}>{language === "ar" ? "تذكير الصلاة" : "Prayer reminder"}</Text><Text style={styles.reminderHint}>{language === "ar" ? "تنبيه محلي قبل الصلاة، ويمكنك اختيار نعم أو تأجيله" : "A local reminder before prayer; choose done or snooze"}</Text></View><Pressable accessibilityRole="switch" accessibilityState={{ checked: remindersEnabled }} onPress={() => void updatePrayerReminders(!remindersEnabled)} style={[styles.reminderSwitch, remindersEnabled && styles.reminderSwitchOn]}><View style={[styles.reminderKnob, remindersEnabled && styles.reminderKnobOn]} /></Pressable></View>
                 {remindersEnabled && <View style={styles.reminderMinutes}><Text style={styles.reminderMinutesLabel}>{language === "ar" ? "التنبيه قبل الصلاة بـ" : "Remind me"}</Text>{([15, 30, 45] as const).map((minutes) => <Pressable key={minutes} onPress={() => { setReminderMinutes(minutes); void updatePrayerReminders(true, minutes); }} style={[styles.minuteChip, reminderMinutes === minutes && styles.minuteChipActive]}><Text style={[styles.minuteChipText, reminderMinutes === minutes && styles.minuteChipTextActive]}>{minutes} {language === "ar" ? "دقيقة" : "min"}</Text></Pressable>)}</View>}
+                {reminderScheduleError && <Text style={styles.reminderError}>{reminderScheduleError}</Text>}
+                {remindersEnabled && Platform.OS === "android" && Number(Platform.Version) >= 31 && <View style={styles.exactAlarmHelp}><Text style={styles.reminderHint}>{language === "ar" ? "قد يؤخر Android التذكير إذا لم تسمح لمحرابي بالتنبيهات الدقيقة. فعّل الإذن من إعدادات النظام." : "Android may delay reminders unless Mehrabi is allowed to schedule exact alarms. Enable it in system settings."}</Text><Pressable onPress={() => void openExactAlarmSettings()} accessibilityRole="button"><Text style={styles.authLinkText}>{language === "ar" ? "ضبط التنبيهات الدقيقة" : "Set exact alarms"}</Text></Pressable></View>}
               </View>
               <View style={styles.legalLinks}><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/privacy" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "سياسة الخصوصية" : "Privacy policy"}</Text></Pressable><Text style={styles.legalSeparator}>•</Text><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/terms" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "شروط الاستخدام" : "Terms of use"}</Text></Pressable></View>
               {meQuery.data && <Pressable style={styles.secondaryModalButton} onPress={signOut}><Text style={styles.secondaryModalText}>{ui.logout}</Text></Pressable>}
@@ -1242,280 +924,3 @@ export default function HomeScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.canvas },
-  scroll: { paddingHorizontal: 20, paddingBottom: 104 },
-  header: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", paddingTop: 12, paddingBottom: 20 },
-  brandRow: { flexDirection: "row-reverse", alignItems: "center", gap: 9 },
-  logoMark: { width: 46, height: 46, borderRadius: 15, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", overflow: "hidden", shadowColor: COLORS.navy, shadowOpacity: 0.16, shadowRadius: 10, shadowOffset: { width: 0, height: 5 }, elevation: 4 },
-  logoImage: { width: 46, height: 46 },
-  brandCopy: { alignItems: "flex-end" },
-  brand: { color: COLORS.navy, fontSize: 20, fontWeight: "900", letterSpacing: -0.3 },
-  brandTagline: { color: COLORS.teal, fontSize: 9, fontWeight: "700", marginTop: -1 },
-  headerActions: { flexDirection: "row-reverse", alignItems: "center", gap: 10 },
-  languageButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: COLORS.line },
-  languageText: { fontSize: 11, fontWeight: "800", color: COLORS.navy },
-  profileButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.goldSoft, alignItems: "center", justifyContent: "center" },
-  profileLetter: { color: COLORS.navy, fontWeight: "800", fontSize: 15 },
-  greetingBlock: { alignItems: "flex-end", marginBottom: 15 },
-  greetingPill: { flexDirection: "row-reverse", alignItems: "center", gap: 6, backgroundColor: COLORS.goldSoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, marginBottom: 9 },
-  greetingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.gold },
-  eyebrow: { color: COLORS.navy, fontSize: 11, fontWeight: "800" },
-  title: { color: COLORS.ink, fontSize: 28, fontWeight: "900", letterSpacing: -0.6 },
-  heroHint: { color: COLORS.muted, fontSize: 12, marginTop: 6, textAlign: "right" },
-  locationButton: { alignSelf: "flex-end", flexDirection: "row-reverse", alignItems: "center", gap: 7, paddingHorizontal: 15, height: 40, borderRadius: 14, backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.line, marginBottom: 15 },
-  locationButtonActive: { borderColor: "#B9E4D4", backgroundColor: "#F2FCF8" },
-  locationButtonText: { color: COLORS.navy, fontSize: 13, fontWeight: "700" },
-  locationError: { color: COLORS.red, fontSize: 11, textAlign: "right", marginTop: -8, marginBottom: 10 },
-  prayerCard: { backgroundColor: COLORS.navy, borderRadius: 26, padding: 21, minHeight: 174, marginBottom: 16, overflow: "hidden", shadowColor: COLORS.navy, shadowOpacity: 0.24, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, elevation: 6 },
-  prayerOrb: { position: "absolute", width: 185, height: 185, borderRadius: 93, right: -68, top: -64, backgroundColor: "rgba(90,175,167,0.19)", borderWidth: 1, borderColor: "rgba(243,180,75,0.22)" },
-  prayerTop: { flexDirection: "row-reverse", justifyContent: "space-between" },
-  prayerLabel: { color: "#88A9C3", fontSize: 11, marginBottom: 7, textAlign: "right" },
-  prayerName: { color: COLORS.white, fontSize: 22, fontWeight: "800", textAlign: "right" },
-  prayerTime: { color: "#B6CAD9", fontSize: 11, marginTop: 4, textAlign: "right" },
-  countdownWrap: { alignItems: "flex-start", paddingTop: 12 },
-  countdown: { color: COLORS.white, fontSize: 24, fontWeight: "800", letterSpacing: 0.5 },
-  countdownCaption: { color: "#9FB6C7", fontSize: 10, marginTop: 2 },
-  progressTrack: { height: 4, backgroundColor: "#2C4C68", borderRadius: 4, marginTop: 19, overflow: "hidden" },
-  progressFill: { height: 4, width: "44%", backgroundColor: COLORS.gold, borderRadius: 4 },
-  prayerFooter: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
-  nextHint: { color: "#8BA4B8", fontSize: 10 },
-  prayerLink: { color: COLORS.gold, fontSize: 11, fontWeight: "700" },
-  prayerTimesButton: { paddingVertical: 4, paddingHorizontal: 2 },
-  dailyPrayersHeader: { marginTop: 3, marginBottom: 10 },
-  dailyPrayersTitleRow: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between" },
-  dailyPrayersTitle: { color: COLORS.navy, fontSize: 17, fontWeight: "900", textAlign: "right" },
-  dailyPrayersDate: { flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: "#EAF6F4", borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 },
-  dailyPrayersDateText: { color: COLORS.teal, fontSize: 10, fontWeight: "800" },
-  dailyPrayersHint: { color: COLORS.muted, fontSize: 10, textAlign: "right", marginTop: 4 },
-  dailyPrayersGrid: { flexDirection: "row-reverse", flexWrap: "wrap", gap: 8, marginBottom: 20 },
-  dailyPrayerTile: { width: "30%", minHeight: 105, backgroundColor: COLORS.white, borderRadius: 17, padding: 10, alignItems: "flex-end", borderWidth: 1, borderColor: COLORS.line, shadowColor: COLORS.navy, shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
-  dailyPrayerTileActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy, shadowOpacity: 0.16 },
-  dailyPrayerIcon: { width: 31, height: 31, borderRadius: 11, backgroundColor: "#E7F6F3", alignItems: "center", justifyContent: "center", marginBottom: 8 },
-  dailyPrayerIconActive: { backgroundColor: "rgba(243,180,75,0.18)" },
-  dailyPrayerName: { color: COLORS.muted, fontSize: 11, fontWeight: "800", textAlign: "right" },
-  dailyPrayerNameActive: { color: "#B6CAD9" },
-  dailyPrayerTime: { color: COLORS.navy, fontSize: 15, fontWeight: "900", marginTop: 4, textAlign: "right" },
-  dailyPrayerTimeActive: { color: COLORS.white },
-  nextPrayerBadge: { position: "absolute", left: 8, bottom: 8, backgroundColor: COLORS.gold, borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2 },
-  nextPrayerBadgeText: { color: COLORS.navy, fontSize: 8, fontWeight: "900" },
-  quickActions: { flexDirection: "row-reverse", gap: 9, marginBottom: 27 },
-  quickAction: { flex: 1, minHeight: 101, backgroundColor: COLORS.white, borderRadius: 18, padding: 11, alignItems: "flex-end", borderWidth: 1, borderColor: COLORS.line, shadowColor: COLORS.navy, shadowOpacity: 0.05, shadowRadius: 9, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  quickIcon: { width: 35, height: 35, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 8 },
-  quickIconGold: { backgroundColor: COLORS.goldSoft },
-  quickIconTeal: { backgroundColor: "#E7F6F3" },
-  quickIconBlue: { backgroundColor: "#EAF0FA" },
-  quickActionText: { color: COLORS.ink, fontSize: 12, fontWeight: "900", textAlign: "right" },
-  quickActionHint: { color: COLORS.muted, fontSize: 9, marginTop: 3, textAlign: "right" },
-  discoveryCard: { backgroundColor: "#F0F7F7", borderRadius: 24, padding: 14, marginBottom: 17, borderWidth: 1, borderColor: "#DCEBEA" },
-  discoveryTitleRow: { flexDirection: "row-reverse", alignItems: "center", gap: 9, marginBottom: 12 },
-  discoveryIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center" },
-  discoveryCopy: { flex: 1, alignItems: "flex-end" },
-  discoveryEyebrow: { color: COLORS.teal, fontSize: 10, fontWeight: "800", textAlign: "right", marginBottom: 2 },
-  discoveryTitle: { color: COLORS.ink, fontSize: 17, fontWeight: "900", textAlign: "right" },
-  typeSegmentRow: { flexDirection: "row-reverse", gap: 6, marginTop: 10 },
-  typeSegment: { flex: 1, height: 39, borderRadius: 12, backgroundColor: COLORS.white, borderWidth: 1, borderColor: "#DDE7EA", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 5 },
-  typeSegmentActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
-  typeSegmentMosque: { backgroundColor: COLORS.mosqueGreen, borderColor: COLORS.mosqueGreen },
-  typeSegmentMusalla: { backgroundColor: COLORS.musallaBlue, borderColor: COLORS.musallaBlue },
-  typeSegmentText: { color: COLORS.muted, fontSize: 11, fontWeight: "800" },
-  typeSegmentTextActive: { color: COLORS.white },
-  filterButton: { height: 35, marginTop: 9, borderTopWidth: 1, borderTopColor: "#DCEBEA", flexDirection: "row-reverse", alignItems: "center", gap: 5, paddingTop: 8 },
-  filterButtonText: { color: COLORS.navy, fontSize: 11, fontWeight: "900" },
-  filterButtonValue: { color: COLORS.muted, fontSize: 10, marginRight: "auto" },
-  sectionHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 13 },
-  sectionEyebrow: { color: COLORS.teal, fontSize: 11, textAlign: "right", marginBottom: 4, fontWeight: "700" },
-  sectionTitle: { color: COLORS.ink, fontSize: 21, fontWeight: "900", textAlign: "right", letterSpacing: -0.3 },
-  seeAll: { color: COLORS.navy, fontSize: 12, fontWeight: "700", paddingBottom: 2 },
-  searchBox: { height: 53, borderRadius: 17, backgroundColor: COLORS.white, borderWidth: 1, borderColor: "#D9E5EA", flexDirection: "row-reverse", alignItems: "center", paddingHorizontal: 15, gap: 9, shadowColor: COLORS.navy, shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  searchInput: { flex: 1, color: COLORS.ink, fontSize: 13, paddingVertical: 0 },
-  shortcut: { backgroundColor: COLORS.canvas, paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 },
-  shortcutText: { color: COLORS.muted, fontSize: 10 },
-  filters: { flexDirection: "row-reverse", gap: 7, paddingVertical: 12 },
-  filterChip: { flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.line, borderRadius: 999, paddingHorizontal: 12, height: 35 },
-  filterChipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
-  filterText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
-  filterTextActive: { color: COLORS.white },
-  dot: { width: 6, height: 6, borderRadius: 3 },
-  mapCard: { height: 300, borderRadius: 23, overflow: "hidden", backgroundColor: "#E3EFEF", position: "relative", borderWidth: 1, borderColor: "#D9E5E7", marginBottom: 8, shadowColor: COLORS.navy, shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 2 },
-  mapHeader: { position: "absolute", zIndex: 3, top: 10, left: 11, right: 11, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  mapTitleBadge: { flexDirection: "row-reverse", alignItems: "center", gap: 4, backgroundColor: "rgba(255,255,255,0.93)", borderRadius: 9, paddingHorizontal: 8, paddingVertical: 5 },
-  mapBadge: { backgroundColor: "rgba(255,255,255,0.9)", color: COLORS.green, fontSize: 10, fontWeight: "700", paddingHorizontal: 8, paddingVertical: 5, borderRadius: 8 },
-  mapProvider: { color: "#6A8A8F", fontSize: 9, fontWeight: "700" },
-  mapControl: { position: "absolute", bottom: 10, left: 10, width: 34, height: 34, borderRadius: 10, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center" },
-  mapLegend: { position: "absolute", right: 10, bottom: 10, flexDirection: "row-reverse", alignItems: "center", gap: 8, backgroundColor: "rgba(255,255,255,0.93)", borderRadius: 10, paddingHorizontal: 9, paddingVertical: 7 },
-  legendItem: { flexDirection: "row-reverse", alignItems: "center", gap: 4 },
-  legendDot: { width: 7, height: 7, borderRadius: 4 },
-  legendLocation: { backgroundColor: "#4A94F5", borderWidth: 2, borderColor: "#DDEBFF" },
-  legendText: { color: COLORS.muted, fontSize: 9, fontWeight: "800" },
-  mapCoverage: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 8, paddingHorizontal: 4, marginBottom: 10 },
-  mapCoverageText: { flex: 1, color: COLORS.muted, fontSize: 11, lineHeight: 16, textAlign: "right" },
-  mapCoverageRetry: { color: COLORS.green, fontSize: 10, fontWeight: "800" },
-  nearestMosqueCard: { flexDirection: "row-reverse", alignItems: "center", gap: 10, backgroundColor: "#EAF7F3", borderWidth: 1, borderColor: "#CFE8DE", borderRadius: 15, padding: 12, marginBottom: 15 },
-  nearestMosqueCopy: { flex: 1, alignItems: "flex-end" },
-  nearestMosqueLabel: { color: COLORS.teal, fontSize: 10, fontWeight: "800", textAlign: "right" },
-  nearestMosqueName: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginTop: 3 },
-  nearestMosqueMeta: { color: COLORS.muted, fontSize: 10, textAlign: "right", lineHeight: 15, marginTop: 3 },
-  nearestMosqueAction: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 4, backgroundColor: COLORS.navy, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 8 },
-  nearestMosqueActionText: { color: COLORS.white, fontSize: 10, fontWeight: "800" },
-  listHeader: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginBottom: 9 },
-  nearbyCount: { color: COLORS.ink, fontSize: 13, fontWeight: "800" },
-  emptyPlacesNotice: { backgroundColor: "#F5F8FA", borderRadius: 12, padding: 11, marginBottom: 10, borderWidth: 1, borderColor: COLORS.line },
-  emptyPlacesNoticeText: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "right", writingDirection: "rtl" },
-  sortText: { color: COLORS.muted, fontSize: 11 },
-  offlineNotice: { color: COLORS.gold, backgroundColor: COLORS.goldSoft, borderRadius: 8, padding: 8, fontSize: 10, textAlign: "right", marginBottom: 8 },
-  groupTitle: { color: COLORS.navy, fontSize: 16, fontWeight: "800", textAlign: "right", marginTop: 10, marginBottom: 8 },
-  mosqueTitle: { color: COLORS.mosqueGreen },
-  musallaTitle: { color: COLORS.musallaBlue },
-  placeCard: { backgroundColor: COLORS.white, borderRadius: 19, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.line, shadowColor: COLORS.navy, shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  mosqueCard: { borderRightWidth: 3, borderRightColor: COLORS.mosqueGreen },
-  musallaCard: { borderRightWidth: 3, borderRightColor: COLORS.musallaBlue },
-  placeMain: { flexDirection: "row-reverse", alignItems: "flex-start" },
-  placeIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", marginLeft: 10 },
-  mosqueIcon: { backgroundColor: "#E5F7F0" },
-  musallaIcon: { backgroundColor: COLORS.musallaSoft },
-  placeInfo: { flex: 1 },
-  placeSourceText: { color: COLORS.muted, fontSize: 10, lineHeight: 15, textAlign: "right", marginBottom: 4 },
-  nameRow: { flexDirection: "row-reverse", alignItems: "center", gap: 7, marginBottom: 6 },
-  placeName: { color: COLORS.ink, fontSize: 15, fontWeight: "900", textAlign: "right", flexShrink: 1 },
-  typePill: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 3 },
-  typePillMosque: { backgroundColor: "#E5F7F0" },
-  typePillMusalla: { backgroundColor: COLORS.musallaSoft },
-  typePillText: { color: COLORS.navy, fontSize: 9, fontWeight: "900" },
-  statusRow: { flexDirection: "row-reverse", alignItems: "center", gap: 6, marginBottom: 5 },
-  openPill: { backgroundColor: "#E5F7F0", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 3 },
-  closedPill: { backgroundColor: "#FBEAE8" },
-  unknownPill: { backgroundColor: "#FFF2D8" },
-  unverifiedPill: { backgroundColor: "#F1F3F5", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 3 },
-  unverifiedText: { color: COLORS.muted, fontSize: 9, fontWeight: "800" },
-  openText: { color: COLORS.green, fontSize: 9, fontWeight: "800" },
-  closedText: { color: COLORS.red },
-  unknownText: { color: "#B87914" },
-  placeMeta: { color: COLORS.muted, fontSize: 10, textAlign: "right", marginBottom: 6 },
-  distanceRow: { flexDirection: "row-reverse", alignItems: "baseline", gap: 6, marginBottom: 7 },
-  distanceValue: { color: COLORS.navy, fontSize: 17, fontWeight: "900" },
-  distanceHint: { color: COLORS.muted, fontSize: 9, fontWeight: "600" },
-  amenities: { flexDirection: "row-reverse", alignItems: "center", gap: 8 },
-  metaTime: { color: "#A2ABB4", fontSize: 9 },
-  amenity: { color: COLORS.muted, fontSize: 10 },
-  placeActions: { borderTopWidth: 1, borderTopColor: "#F0F3F5", marginTop: 11, paddingTop: 9, flexDirection: "row-reverse", alignItems: "center", gap: 7 },
-  iconAction: { width: 31, height: 31, borderRadius: 9, backgroundColor: COLORS.canvas, alignItems: "center", justifyContent: "center" },
-  goButton: { marginRight: "auto", backgroundColor: COLORS.navy, borderRadius: 9, height: 31, paddingHorizontal: 11, flexDirection: "row-reverse", alignItems: "center", gap: 5 },
-  goText: { color: COLORS.white, fontSize: 10, fontWeight: "800" },
-  addPlaceButton: { height: 46, borderRadius: 13, borderWidth: 1, borderColor: "#D6E0E5", borderStyle: "dashed", alignItems: "center", justifyContent: "center", flexDirection: "row-reverse", gap: 7, marginTop: 2 },
-  addPlaceText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
-  loadMoreButton: { height: 42, borderRadius: 12, backgroundColor: "#EEF5F8", alignItems: "center", justifyContent: "center", marginBottom: 10 },
-  loadMoreText: { color: COLORS.navy, fontSize: 12, fontWeight: "800" },
-  bottomSpace: { height: 12 },
-  tabBar: { position: "absolute", bottom: 12, left: 14, right: 14, height: 68, backgroundColor: "rgba(255,255,255,0.98)", borderWidth: 1, borderColor: "#E1E9ED", borderRadius: 23, flexDirection: "row-reverse", justifyContent: "space-around", alignItems: "center", paddingBottom: 2, shadowColor: COLORS.navy, shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 7 },
-  tabItem: { alignItems: "center", gap: 3, minWidth: 62, paddingVertical: 5 },
-  tabIconWrap: { width: 34, height: 30, borderRadius: 11, alignItems: "center", justifyContent: "center" },
-  tabIconWrapActive: { backgroundColor: "#E7F3F2" },
-  qiblaTabItem: { marginTop: -15 },
-  qiblaTabIcon: { width: 51, height: 51, borderRadius: 18, backgroundColor: COLORS.navy, borderWidth: 3, borderColor: COLORS.goldSoft, alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.22, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 5 },
-  qiblaTabText: { color: COLORS.navy, fontWeight: "900" },
-  tabText: { color: COLORS.muted, fontSize: 10, fontWeight: "700" },
-  tabActive: { color: COLORS.navy },
-  modalBackdrop: { flex: 1, backgroundColor: "rgba(16,45,74,0.35)", justifyContent: "flex-end" },
-  modalCard: { backgroundColor: COLORS.white, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 22, minHeight: 300, paddingBottom: 38 },
-  modalClose: { alignSelf: "flex-start", width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.canvas, alignItems: "center", justifyContent: "center" },
-  modalTitle: { color: COLORS.navy, fontSize: 25, fontWeight: "900", textAlign: "right", writingDirection: "rtl", marginTop: 14, marginBottom: 10 },
-  modalHint: { color: COLORS.muted, fontSize: 13, lineHeight: 21, fontWeight: "500", textAlign: "right", writingDirection: "rtl", marginBottom: 16 },
-  accountHero: { alignItems: "flex-end", marginTop: 8 },
-  accountHeroIcon: { width: 52, height: 52, borderRadius: 17, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginBottom: 10 },
-  accountAuthCard: { backgroundColor: "#F3F8F8", borderRadius: 17, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: "#DCECEB" },
-  accountBenefit: { flexDirection: "row-reverse", alignItems: "center", gap: 7, marginBottom: 2 },
-  accountBenefitText: { color: COLORS.green, fontSize: 10, fontWeight: "800" },
-  accountSignedIn: { backgroundColor: "#F3F8F8", borderRadius: 17, padding: 13, marginBottom: 10, borderWidth: 1, borderColor: "#DCECEB" },
-  accountUserRow: { flexDirection: "row-reverse", alignItems: "center", gap: 9 },
-  accountAvatar: { width: 43, height: 43, borderRadius: 15, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center" },
-  accountAvatarText: { color: COLORS.gold, fontSize: 19, fontWeight: "900" },
-  accountUserCopy: { flex: 1, alignItems: "flex-end" },
-  accountUserName: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right" },
-  accountUserHint: { color: COLORS.muted, fontSize: 10, marginTop: 2, textAlign: "right" },
-  exploreRow: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.line },
-  exploreRowText: { color: COLORS.ink, fontSize: 14, fontWeight: "700" },
-  exploreHero: { alignItems: "flex-end", marginTop: 8, marginBottom: 14 },
-  exploreHeroIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginBottom: 10 },
-  exploreTypeCards: { flexDirection: "row-reverse", gap: 9, marginBottom: 12 },
-  exploreTypeCard: { flex: 1, borderRadius: 17, padding: 13, borderWidth: 1, minHeight: 142, alignItems: "flex-end" },
-  exploreMosqueCard: { backgroundColor: "#F0FAF6", borderColor: "#D5EEE3" },
-  exploreMusallaCard: { backgroundColor: "#F3F4FF", borderColor: "#E0E3FF" },
-  exploreCardIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: COLORS.white, alignItems: "center", justifyContent: "center", marginBottom: 11 },
-  exploreCardIconBlue: { backgroundColor: COLORS.white },
-  exploreCardTitle: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right" },
-  exploreCardCount: { color: COLORS.muted, fontSize: 10, marginTop: 3, textAlign: "right" },
-  exploreCardAction: { color: COLORS.navy, fontSize: 10, fontWeight: "900", marginTop: "auto", textAlign: "right" },
-  exploreLocationNote: { flexDirection: "row-reverse", alignItems: "center", gap: 7, backgroundColor: COLORS.goldSoft, borderRadius: 12, padding: 10, marginBottom: 16 },
-  exploreLocationText: { flex: 1, color: COLORS.navy, fontSize: 10, fontWeight: "700", textAlign: "right", lineHeight: 16 },
-  exploreQuickTitle: { color: COLORS.ink, fontSize: 14, fontWeight: "900", textAlign: "right", marginBottom: 5 },
-  exploreQuickGrid: { borderTopWidth: 1, borderTopColor: COLORS.line },
-  exploreQuickItem: { flexDirection: "row-reverse", alignItems: "center", gap: 8, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.line },
-  exploreQuickText: { color: COLORS.ink, fontSize: 12, fontWeight: "800", flex: 1, textAlign: "right" },
-  qiblaHeroHint: { color: COLORS.teal, fontSize: 13, fontWeight: "800", textAlign: "center", marginBottom: 3 },
-  qiblaSmartBadge: { alignSelf: "center", flexDirection: "row-reverse", alignItems: "center", gap: 5, backgroundColor: "#E5F7F0", borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 7 },
-  qiblaSmartText: { color: COLORS.green, fontSize: 11, fontWeight: "900" },
-  qiblaAutoNote: { flexDirection: "row-reverse", alignItems: "flex-start", gap: 7, backgroundColor: "#F0F7F7", borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: "#DCEBEA" },
-  qiblaAutoNoteText: { flex: 1, color: COLORS.navy, fontSize: 11, lineHeight: 18, fontWeight: "700", textAlign: "right" },
-  qiblaCompass: { alignItems: "center", justifyContent: "center", height: 220, marginVertical: 2, position: "relative" },
-  qiblaGlow: { position: "absolute", width: 205, height: 205, borderRadius: 103, backgroundColor: "#EAF7F5" },
-  qiblaDegrees: { color: COLORS.navy, fontSize: 30, fontWeight: "900", textAlign: "center", marginBottom: 8 },
-  qiblaRing: { width: 188, height: 188, borderRadius: 94, borderWidth: 7, borderColor: "#C9E3E0", backgroundColor: "#F8FCFC", alignItems: "center", justifyContent: "center", shadowColor: COLORS.navy, shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
-  qiblaNorth: { position: "absolute", top: 10, color: COLORS.navy, fontWeight: "900", fontSize: 12 },
-  qiblaEast: { position: "absolute", right: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaSouth: { position: "absolute", bottom: 10, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaWest: { position: "absolute", left: 12, color: COLORS.muted, fontWeight: "800", fontSize: 11 },
-  qiblaNeedle: { alignItems: "center", justifyContent: "center", width: 86, height: 86 },
-  kaabaBadge: { position: "absolute", top: 6, width: 34, height: 34, borderRadius: 17, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: COLORS.gold },
-  qiblaCenter: { position: "absolute", width: 14, height: 14, borderRadius: 7, backgroundColor: COLORS.navy, borderWidth: 3, borderColor: COLORS.white },
-  qiblaStats: { flexDirection: "row-reverse", justifyContent: "space-evenly", marginVertical: 10, paddingVertical: 10, borderTopWidth: 1, borderBottomWidth: 1, borderColor: COLORS.line },
-  qiblaStatValue: { color: COLORS.navy, fontSize: 20, fontWeight: "900", textAlign: "center" },
-  qiblaStatLabel: { color: COLORS.muted, fontSize: 10, textAlign: "center", marginTop: 2 },
-  compassStatus: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 7, marginBottom: 4 },
-  compassStatusDot: { width: 8, height: 8, borderRadius: 4 },
-  compassStatusReady: { backgroundColor: COLORS.green },
-  compassStatusWaiting: { backgroundColor: COLORS.gold },
-  compassStatusText: { color: COLORS.muted, fontSize: 11, fontWeight: "700" },
-  primaryModalButton: { height: 50, borderRadius: 14, backgroundColor: COLORS.navy, alignItems: "center", justifyContent: "center", marginTop: 10 },
-  primaryModalText: { color: COLORS.white, fontSize: 15, fontWeight: "800", writingDirection: "rtl" },
-  calibrationHint: { color: COLORS.muted, fontSize: 11, lineHeight: 18, textAlign: "center", marginBottom: 3 },
-  secondaryModalButton: { height: 44, borderRadius: 13, backgroundColor: COLORS.canvas, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center", marginTop: 10 },
-  secondaryModalText: { color: COLORS.navy, fontSize: 14, fontWeight: "800", writingDirection: "rtl" },
-  pickerMap: { height: 220, overflow: "hidden", borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, marginBottom: 4 },
-  checkRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 4 },
-  checkButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },
-  checkButtonActive: { backgroundColor: "#E5F7F0", borderColor: COLORS.green },
-  adminLink: { alignItems: "center", paddingVertical: 14 },
-  adminLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800" },
-  formInput: { height: 52, borderWidth: 1.5, borderColor: "#C8D4DC", borderRadius: 14, paddingHorizontal: 15, paddingVertical: 0, color: COLORS.ink, marginBottom: 11, backgroundColor: COLORS.white, fontSize: 16, fontWeight: "500", writingDirection: "rtl", textAlignVertical: "center" },
-  otpInput: { fontSize: 22, fontWeight: "900", letterSpacing: 6, color: COLORS.navy },
-  emailInput: { writingDirection: "ltr", fontWeight: "500" },
-  commentInput: { height: 96, paddingTop: 14, textAlignVertical: "top" },
-  formError: { color: COLORS.red, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
-  formSuccess: { color: COLORS.green, fontSize: 11, lineHeight: 17, textAlign: "right", marginTop: 8 },
-  authLink: { alignItems: "center", paddingVertical: 12 },
-  authLinkText: { color: COLORS.teal, fontSize: 13, fontWeight: "800", writingDirection: "rtl" },
-  reminderBox: { backgroundColor: "#F3F8F8", borderRadius: 14, padding: 13, marginTop: 10, borderWidth: 1, borderColor: "#DCECEB" },
-  reminderHeader: { flexDirection: "row-reverse", alignItems: "center", justifyContent: "space-between", gap: 10 },
-  reminderTitle: { color: COLORS.navy, fontSize: 13, fontWeight: "900", textAlign: "right" },
-  reminderHint: { color: COLORS.muted, fontSize: 10, lineHeight: 16, textAlign: "right", marginTop: 3, maxWidth: 230 },
-  reminderSwitch: { width: 46, height: 27, borderRadius: 14, backgroundColor: "#C8D4DC", padding: 3, justifyContent: "center" },
-  reminderSwitchOn: { backgroundColor: COLORS.green },
-  reminderKnob: { width: 21, height: 21, borderRadius: 11, backgroundColor: COLORS.white },
-  reminderKnobOn: { alignSelf: "flex-end" },
-  reminderMinutes: { flexDirection: "row-reverse", alignItems: "center", flexWrap: "wrap", gap: 6, marginTop: 11 },
-  reminderMinutesLabel: { color: COLORS.muted, fontSize: 10, fontWeight: "700" },
-  minuteChip: { borderRadius: 8, borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white, paddingHorizontal: 8, paddingVertical: 6 },
-  minuteChipActive: { backgroundColor: COLORS.navy, borderColor: COLORS.navy },
-  minuteChipText: { color: COLORS.muted, fontSize: 10, fontWeight: "800" },
-  minuteChipTextActive: { color: COLORS.white },
-  legalLinks: { flexDirection: "row-reverse", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 12 },
-  legalLinkText: { color: COLORS.teal, fontSize: 10, fontWeight: "800" },
-  legalSeparator: { color: COLORS.muted, fontSize: 10 },
-  ratingRow: { flexDirection: "row", justifyContent: "center", gap: 10, marginVertical: 14 },
-  typeRow: { flexDirection: "row-reverse", gap: 8, marginBottom: 6 },
-  typeButton: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: COLORS.line, alignItems: "center", justifyContent: "center" },
-  typeButtonActive: { backgroundColor: COLORS.goldSoft, borderColor: COLORS.gold },
-  typeText: { color: COLORS.navy, fontWeight: "800" },
-});
