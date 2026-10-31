@@ -34,32 +34,46 @@ export function getPublicAppUrl() {
   return url.origin;
 }
 
+function getSmtpPassword() {
+  return process.env.SMTP_PASS?.trim() || process.env.SMTP_PASSWORD?.trim() || "";
+}
+
+function getSmtpSecure(port: number): boolean | null {
+  const value = process.env.SMTP_SECURE?.trim().toLowerCase();
+  if (!value) return port === 465;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
 export function isSmtpConfigured() {
   const port = Number(process.env.SMTP_PORT || "587");
   return Boolean(
     process.env.SMTP_HOST?.trim() &&
       process.env.SMTP_USER?.trim() &&
-      process.env.SMTP_PASSWORD &&
+      getSmtpPassword() &&
       Number.isInteger(port) &&
       port >= 1 &&
-      port <= 65535,
+      port <= 65535 &&
+      getSmtpSecure(port) !== null,
   );
 }
 
 function getTransporter() {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const password = process.env.SMTP_PASSWORD;
+  const host = process.env.SMTP_HOST?.trim();
+  const user = process.env.SMTP_USER?.trim();
+  const password = getSmtpPassword();
   const port = Number(process.env.SMTP_PORT || "587");
+  const secure = getSmtpSecure(port);
 
-  if (!host || !user || !password || !Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("SMTP production secrets are not configured");
+  if (!host || !user || !password || !Number.isInteger(port) || port < 1 || port > 65535 || secure === null) {
+    throw new Error("SMTP server settings are not configured correctly");
   }
 
   return nodemailer.createTransport({
     host,
     port,
-    secure: port === 465,
+    secure,
     auth: { user, pass: password },
     connectionTimeout: 15000,
     greetingTimeout: 15000,
@@ -68,13 +82,12 @@ function getTransporter() {
 }
 
 async function sendSystemEmail(input: { to: string; subject: string; text: string; html: string }) {
-  const user = process.env.SMTP_USER;
+  const user = process.env.SMTP_USER?.trim();
   const from = process.env.SMTP_FROM?.trim();
-  if (!user) throw new Error("SMTP production sender is not configured");
+  if (!user) throw new Error("SMTP sender is not configured");
   console.log(`[Email] Sending message through SMTP on port ${Number(process.env.SMTP_PORT || "587")}`);
   const result = await getTransporter().sendMail({
-    from: `مِحرابي <${user}>`,
-    replyTo: from && from.includes("@") ? from : user,
+    from: from || `مِحرابي <${user}>`,
     to: input.to,
     subject: input.subject,
     text: input.text,
