@@ -644,32 +644,67 @@ export default function HomeScreen() {
   };
 
   const submitEmailAuth = async () => {
+    if (emailAuthNeedsOtp && !/^\d{6}$/.test(emailAuthOtp)) {
+      setEmailAuthError(language === "ar" ? "أدخل رمز التحقق المكوّن من 6 أرقام." : "Enter the 6-digit verification code.");
+      return;
+    }
     setEmailAuthBusy(true);
     setEmailAuthError(null);
     setEmailAuthMessage(null);
     try {
-      const endpoint = emailAuthMode === "register" ? "register" : emailAuthMode === "forgot" ? "forgot-password" : "login";
-      const body = emailAuthMode === "register"
-        ? { name: emailAuthName, phone: emailAuthPhone, email: emailAuthEmail, password: emailAuthPassword }
-        : emailAuthMode === "forgot"
-          ? { email: emailAuthEmail }
-          : { identifier: emailAuthEmail, password: emailAuthPassword };
+      const endpoint = emailAuthNeedsOtp
+        ? "verify-otp"
+        : emailAuthMode === "register"
+          ? "register"
+          : emailAuthMode === "forgot"
+            ? "forgot-password"
+            : "login";
+      const body = emailAuthNeedsOtp
+        ? { email: emailAuthEmail, code: emailAuthOtp }
+        : emailAuthMode === "register"
+          ? { name: emailAuthName, phone: emailAuthPhone, email: emailAuthEmail, password: emailAuthPassword }
+          : emailAuthMode === "forgot"
+            ? { email: emailAuthEmail }
+            : { identifier: emailAuthEmail, password: emailAuthPassword };
       const response = await fetch(`${getApiBaseUrl()}/api/auth/email/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-client-platform": Platform.OS === "web" ? "web" : "native" },
         credentials: "include",
         body: JSON.stringify(body),
       });
-      const payload = (await response.json().catch(() => ({}))) as { error?: string; message?: string; app_session_id?: string; code?: string };
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        app_session_id?: string;
+        verificationRequired?: boolean;
+      };
       if (!response.ok) {
         throw new Error(payload.error || (language === "ar" ? "تعذر إكمال العملية." : "Unable to complete the request."));
       }
-      if (emailAuthMode === "login" || emailAuthMode === "register") {
+
+      if (emailAuthNeedsOtp) {
+        if (payload.app_session_id) await Auth.setSessionToken(payload.app_session_id);
+        await meQuery.refetch();
+        setEmailAuthNeedsOtp(false);
+        setEmailAuthOtp("");
+        setEmailAuthCanResend(false);
+        setEmailAuthVisible(false);
+      } else if (emailAuthMode === "register") {
+        if (!payload.verificationRequired) {
+          throw new Error(language === "ar" ? "لم يصل تأكيد طلب التسجيل. حاول مرة أخرى." : "Registration verification was not confirmed. Please try again.");
+        }
+        setEmailAuthOtp("");
+        setEmailAuthNeedsOtp(true);
+        setEmailAuthCanResend(true);
+        setEmailAuthMessage(language === "ar"
+          ? `أرسلنا رمز تحقق من 6 أرقام إلى ${emailAuthEmail}. أدخله هنا لإكمال التسجيل.`
+          : `We sent a 6-digit verification code to ${emailAuthEmail}. Enter it here to finish signing up.`);
+      } else if (emailAuthMode === "login") {
         if (payload.app_session_id) await Auth.setSessionToken(payload.app_session_id);
         await meQuery.refetch();
         setEmailAuthVisible(false);
       } else {
-        setEmailAuthMessage(ui.resetSent);
+        setEmailAuthMessage(payload.message || ui.resetSent);
       }
     } catch (error) {
       setEmailAuthError(error instanceof Error ? error.message : (language === "ar" ? "تعذر إكمال العملية." : "Unable to complete the request."));
