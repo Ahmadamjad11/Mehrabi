@@ -62,6 +62,57 @@ export const bearingToKaaba = (latitude: number, longitude: number) => {
   return (bearing + 360) % 360;
 };
 
+export const isValidCompassHeading = (value: number) =>
+  Number.isFinite(value) && value >= 0 && value <= 360;
+
+export const normalizeCompassHeading = (value: number) =>
+  ((value % 360) + 360) % 360;
+
+export const smoothCompassHeading = (
+  previous: number | null,
+  next: number,
+  factor = 0.28,
+): number | null => {
+  if (!isValidCompassHeading(next)) return previous;
+  const normalizedNext = normalizeCompassHeading(next);
+  if (
+    previous === null ||
+    !isValidCompassHeading(previous) ||
+    !Number.isFinite(factor) ||
+    factor <= 0 ||
+    factor > 1
+  ) {
+    return normalizedNext;
+  }
+
+  const normalizedPrevious = normalizeCompassHeading(previous);
+  const delta = ((normalizedNext - normalizedPrevious + 540) % 360) - 180;
+  return normalizeCompassHeading(normalizedPrevious + delta * factor);
+};
+
+export const getQiblaRotation = (qiblaBearing: number, heading: number) => {
+  if (!isValidCompassHeading(qiblaBearing) || !isValidCompassHeading(heading)) return null;
+  return ((normalizeCompassHeading(qiblaBearing) - normalizeCompassHeading(heading) + 540) % 360) - 180;
+};
+
+export const getCompassAccuracyLevel = (accuracy: number | null) => {
+  switch (accuracy) {
+    case 3:
+      return "high" as const;
+    case 2:
+      return "medium" as const;
+    case 1:
+      return "low" as const;
+    case 0:
+      return "none" as const;
+    default:
+      return null;
+  }
+};
+
+export const isReliableCompassAccuracy = (accuracy: number | null) =>
+  accuracy === 2 || accuracy === 3;
+
 export const distanceToKaabaKm = (latitude: number, longitude: number) => {
   const earthRadiusKm = 6371;
   const lat1 = (latitude * Math.PI) / 180;

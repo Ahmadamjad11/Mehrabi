@@ -3,7 +3,6 @@ import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import * as IntentLauncher from "expo-intent-launcher";
 import Constants from "expo-constants";
-import { Magnetometer } from "expo-sensors";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -29,7 +28,7 @@ import * as Auth from "@/lib/_core/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { buildMapLocationCandidates, rankMapLocationsByDistance } from "@/lib/mapLocations";
 import { createOsmHtml, createPickerHtml, EMPTY_COMMUNITY_MAP_POINTS, EMPTY_OFFICIAL_MAP_POINTS, OSM_COPYRIGHT_URL, OSM_MAP_FEATURES } from "@/lib/osmMapHtml";
-import { bearingToKaaba, distanceToKaabaKm, formatClock, formatCountdown, getDynamicGreeting, getJordanCalendarDate, getPrayerSchedule, localizePrayerName } from "@/lib/prayerTimes";
+import { bearingToKaaba, formatClock, formatCountdown, getCompassAccuracyLevel, getDynamicGreeting, getJordanCalendarDate, getPrayerSchedule, getQiblaRotation, isReliableCompassAccuracy, isValidCompassHeading, localizePrayerName, smoothCompassHeading } from "@/lib/prayerTimes";
 import { clearPrayerReminderSchedule, configurePrayerNotifications, schedulePrayerReminders } from "@/lib/prayerReminderNotifications";
 import { COLORS, styles } from "@/components/home/mehrabiStyles";
 
@@ -87,11 +86,12 @@ export default function HomeScreen() {
   const [mapFocusLocation, setMapFocusLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [language, setLanguage] = useState<"ar" | "en">("ar");
   const [now, setNow] = useState(() => new Date());
-  const [compassHeading, setCompassHeading] = useState(0);
+  const [compassHeading, setCompassHeading] = useState<number | null>(null);
   const [headingReady, setHeadingReady] = useState(false);
-  const [headingSource, setHeadingSource] = useState<"gps" | "sensor" | null>(null);
+  const [headingSource, setHeadingSource] = useState<"true" | null>(null);
   const [headingAccuracy, setHeadingAccuracy] = useState<number | null>(null);
-  const headingStreamRef = useRef(false);
+  const lastHeadingRef = useRef<number | null>(null);
+  const [headingProblem, setHeadingProblem] = useState<"calibration" | "unavailable" | "unsupported" | null>(null);
   const [activeTab, setActiveTab] = useState<"home" | "explore" | "qibla" | "account">("home");
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
@@ -451,52 +451,66 @@ export default function HomeScreen() {
     };
   }, [language, locationEnabled]);
 
+  const hasQiblaLocation = userLocation !== null;
+
   useEffect(() => {
-    let subscription: { remove: () => void } | null = null;
-    let magnetometerSubscription: { remove: () => void } | null = null;
-    if (activeTab !== "qibla") {
-      headingStreamRef.current = false;
-      return () => undefined;
+    let subscription: Location.LocationSubscription | null = null;
+    let cancelled = false;
+    if (activeTab !== "qibla") return () => undefined;
+
+    lastHeadingRef.current = null;
+
+    if (Platform.OS === "web") {
+      return () => { cancelled = true; };
     }
-    headingStreamRef.current = false;
-    const smoothHeading = (next: number) => {
-      const normalized = (next + 360) % 360;
-      setCompassHeading((previous) => {
-        const delta = ((normalized - previous + 540) % 360) - 180;
-        return (previous + delta * 0.28 + 360) % 360;
-      });
-      setHeadingReady(true);
+    if (!hasQiblaLocation) return () => { cancelled = true; };
+
+    const markHeadingUnavailable = () => {
+      if (cancelled) return;
+      lastHeadingRef.current = null;
+      setCompassHeading(null);
+      setHeadingReady(false);
+      setHeadingSource(null);
+      setHeadingProblem("unavailable");
     };
-    if (Platform.OS !== "web") void Magnetometer.requestPermissionsAsync().catch(() => undefined);
-    Location.watchHeadingAsync((heading) => {
-      // trueHeading is corrected for magnetic declination when available.
-      const value = heading.trueHeading >= 0 ? heading.trueHeading : heading.magHeading;
-      if (Number.isFinite(value)) {
-        headingStreamRef.current = true;
-        setHeadingSource("gps");
-        setHeadingAccuracy(Number.isFinite(heading.accuracy) ? heading.accuracy : null);
-        smoothHeading(value);
+
+    void Location.watchHeadingAsync((heading) => {
+      if (cancelled) return;
+      const accuracy = Number.isInteger(heading.accuracy) && heading.accuracy >= 0 && heading.accuracy <= 3
+        ? heading.accuracy
+        : null;
+      setHeadingAccuracy(accuracy);
+
+      if (!isReliableCompassAccuracy(accuracy)) {
+        lastHeadingRef.current = null;
+        setCompassHeading(null);
+        setHeadingReady(false);
+        setHeadingSource(null);
+        setHeadingProblem("calibration");
+        return;
       }
-    }).then((next) => { subscription = next; }).catch(() => {
-      // Magnetometer fallback below handles devices without Location heading support.
-    });
-    if (Platform.OS !== "web" && typeof Magnetometer.addListener === "function") {
-      Magnetometer.setUpdateInterval(120);
-      magnetometerSubscription = Magnetometer.addListener(({ x, y }) => {
-        if (headingStreamRef.current || !Number.isFinite(x) || !Number.isFinite(y)) return;
-        // Expo's native axes point east/north; convert them to a clockwise heading.
-        const heading = (Math.atan2(y, x) * 180) / Math.PI;
-        setHeadingSource("sensor");
-        setHeadingAccuracy(null);
-        smoothHeading((360 - heading + 360) % 360);
-      });
-    }
+      if (!isValidCompassHeading(heading.trueHeading)) {
+        markHeadingUnavailable();
+        return;
+      }
+
+      const nextHeading = smoothCompassHeading(lastHeadingRef.current, heading.trueHeading, 0.35);
+      if (nextHeading === null) return;
+      lastHeadingRef.current = nextHeading;
+      setCompassHeading(nextHeading);
+      setHeadingReady(true);
+      setHeadingSource("true");
+      setHeadingProblem(null);
+    }, markHeadingUnavailable).then((next) => {
+      if (cancelled) next.remove();
+      else subscription = next;
+    }).catch(markHeadingUnavailable);
+
     return () => {
+      cancelled = true;
       subscription?.remove();
-      magnetometerSubscription?.remove();
-      headingStreamRef.current = false;
     };
-  }, [activeTab, locationEnabled]);
+  }, [activeTab, hasQiblaLocation]);
 
   const prayerState = useMemo(() => {
     const today = getPrayerSchedule(now, userLocation);
@@ -509,9 +523,50 @@ export default function HomeScreen() {
     return { name: next[0], time: next[1] };
   }, [now, userLocation]);
 
-  const qiblaBearing = bearingToKaaba(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
-  const qiblaRotation = ((qiblaBearing - compassHeading + 540) % 360) - 180;
-  const kaabaDistance = distanceToKaabaKm(userLocation?.lat ?? 31.9539, userLocation?.lng ?? 35.9106);
+  const qiblaBearing = userLocation ? bearingToKaaba(userLocation.lat, userLocation.lng) : null;
+  const qiblaRotation = qiblaBearing !== null && compassHeading !== null && headingReady
+    ? getQiblaRotation(qiblaBearing, compassHeading)
+    : null;
+  const headingAccuracyLevel = getCompassAccuracyLevel(headingAccuracy);
+  const headingAccuracyText = headingAccuracyLevel === "high"
+    ? (language === "ar" ? "عالية" : "high")
+    : headingAccuracyLevel === "medium"
+      ? (language === "ar" ? "متوسطة" : "medium")
+      : headingAccuracyLevel === "low"
+        ? (language === "ar" ? "منخفضة" : "low")
+        : headingAccuracyLevel === "none"
+          ? (language === "ar" ? "غير معايرة" : "uncalibrated")
+          : null;
+  const headingProblemForDisplay = Platform.OS === "web" ? "unsupported" : headingProblem;
+  const qiblaInstruction = !hasQiblaLocation
+    ? locationError || (language === "ar" ? "حدّد موقعك أولًا حتى نحسب اتجاه القبلة الصحيح." : "Set your location first so we can calculate Qibla correctly.")
+    : headingProblemForDisplay === "calibration"
+      ? (language === "ar" ? "البوصلة غير معايرة بما يكفي. حرّك الهاتف ببطء على شكل رقم 8 وأبعده عن المعادن والمغناطيس." : "The compass needs calibration. Slowly move the phone in a figure eight and keep it away from metal or magnets.")
+      : headingProblemForDisplay === "unsupported"
+        ? (language === "ar" ? "البوصلة غير متاحة في نسخة الويب؛ افتح محرابي على هاتف يدعم حساس الاتجاه." : "The web version has no compass. Open Mehrabi on a phone with a heading sensor.")
+        : headingProblemForDisplay === "unavailable"
+          ? (language === "ar" ? "تعذّر الحصول على اتجاه الشمال الحقيقي. تحقق من إذن الموقع ثم أعد فتح القبلة." : "True-north heading is unavailable. Check location permission, then reopen Qibla.")
+          : qiblaRotation === null
+            ? (language === "ar" ? "جارٍ انتظار قراءة بوصلة موثوقة…" : "Waiting for a reliable compass reading…")
+            : Math.abs(qiblaRotation) <= 10
+              ? (language === "ar" ? "أنت باتجاه القبلة تقريبًا؛ اجعل أعلى الهاتف باتجاه السهم." : "You are facing Qibla. Keep the top edge of the phone aligned with the arrow.")
+              : qiblaRotation > 0
+                ? (language === "ar" ? `لف الهاتف يمينًا ${Math.round(Math.abs(qiblaRotation))}° حتى يصطف السهم مع أعلى الشاشة.` : `Turn right ${Math.round(Math.abs(qiblaRotation))}° until the arrow points to the top of the screen.`)
+                : (language === "ar" ? `لف الهاتف يسارًا ${Math.round(Math.abs(qiblaRotation))}° حتى يصطف السهم مع أعلى الشاشة.` : `Turn left ${Math.round(Math.abs(qiblaRotation))}° until the arrow points to the top of the screen.`);
+  const headingSourceText = headingSource === "true"
+    ? (language === "ar" ? "الشمال الحقيقي" : "true north")
+    : (language === "ar" ? "اتجاه موثوق" : "reliable heading");
+  const compassStatusText = !hasQiblaLocation
+    ? (language === "ar" ? "الموقع مطلوب لحساب القبلة." : "Location is required to calculate Qibla.")
+    : headingReady
+      ? (language === "ar" ? `البوصلة جاهزة · ${headingSourceText} · دقة ${headingAccuracyText ?? "متوسطة"}` : `Compass ready · ${headingSourceText} · ${headingAccuracyText ?? "medium"} accuracy`)
+      : headingProblemForDisplay === "calibration"
+        ? (language === "ar" ? "عاير حساس الهاتف حتى تستقر البوصلة." : "Calibrate the phone sensor until the compass stabilizes.")
+        : headingProblemForDisplay === "unsupported"
+          ? (language === "ar" ? "البوصلة غير مدعومة على الويب." : "Compass is not supported on web.")
+          : headingProblemForDisplay === "unavailable"
+            ? (language === "ar" ? "تعذّرت قراءة الشمال الحقيقي." : "Unable to read true north.")
+            : (language === "ar" ? "جارٍ تشغيل البوصلة…" : "Starting compass…");
 
   const filteredPlaces = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -560,11 +615,14 @@ export default function HomeScreen() {
   };
 
   const openQibla = async () => {
+    lastHeadingRef.current = null;
+    setCompassHeading(null);
     setHeadingReady(false);
     setHeadingSource(null);
     setHeadingAccuracy(null);
+    setHeadingProblem(null);
     setActiveTab("qibla");
-    if (!locationEnabled) await requestLocation();
+    if (!userLocation) await requestLocation();
   };
 
   const beginLogin = async () => {
@@ -814,20 +872,22 @@ export default function HomeScreen() {
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
-              <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{language === "ar" ? "تعمل تلقائيًا — بلا معايرة" : "Automatic — no calibration"}</Text></View>
-              <Text style={styles.qiblaHeroHint}>{language === "ar" ? "أمسك هاتفك بأي اتجاه؛ السهم يصحح نفسه ويشير للكعبة" : "Hold your phone in any direction; the arrow corrects itself toward the Kaaba"}</Text>
+              <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{hasQiblaLocation ? (language === "ar" ? "الحساب من موقعك الحالي" : "Calculated from your location") : (language === "ar" ? "الموقع مطلوب" : "Location required")}</Text></View>
+              <Text style={styles.qiblaHeroHint}>{hasQiblaLocation ? (language === "ar" ? "أمسك الهاتف أفقيًا، ولفّه حتى يتجه سهم الكعبة نحو أعلى الشاشة." : "Hold the phone flat and turn it until the Kaaba arrow points to the top of the screen.") : (language === "ar" ? "حدّد موقعك أولًا لنحسب اتجاه القبلة بدقة." : "Set your location first to calculate Qibla accurately.")}</Text>
               <View style={styles.qiblaCompass}>
                 <View style={styles.qiblaGlow} />
                 <View style={styles.qiblaRing}>
-                  <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
-                  <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaRotation}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><MaterialCommunityIcons name="cube-outline" size={20} color={COLORS.white} /></View></View>
+                  {qiblaBearing !== null && qiblaRotation !== null && compassHeading !== null ? <View style={[styles.qiblaDial, { transform: [{ rotate: `${-compassHeading}deg` }] }]}>
+                    <Text style={styles.qiblaNorth}>{language === "ar" ? "ش" : "N"}</Text><Text style={styles.qiblaEast}>{language === "ar" ? "ق" : "E"}</Text><Text style={styles.qiblaSouth}>{language === "ar" ? "ج" : "S"}</Text><Text style={styles.qiblaWest}>{language === "ar" ? "غ" : "W"}</Text>
+                    <View style={[styles.qiblaNeedle, { transform: [{ rotate: `${qiblaBearing}deg` }] }]}><MaterialCommunityIcons name="navigation" size={70} color={COLORS.gold} /><View style={styles.kaabaBadge}><MaterialCommunityIcons name="cube-outline" size={20} color={COLORS.white} /></View></View>
+                  </View> : <Ionicons name="compass-outline" size={30} color={COLORS.muted} />}
                   <View style={styles.qiblaCenter} />
                 </View>
               </View>
-              <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{Math.round(qiblaBearing)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه القبلة" : "Qibla bearing"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(compassHeading)}°</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "اتجاه الهاتف" : "Phone heading"}</Text></View><View><Text style={styles.qiblaStatValue}>{Math.round(kaabaDistance).toLocaleString(language === "ar" ? "ar-JO" : "en-US")}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "كم إلى الكعبة" : "km to Kaaba"}</Text></View></View>
-              <View style={styles.qiblaAutoNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.teal} /><Text style={styles.qiblaAutoNoteText}>{userLocation ? (language === "ar" ? "لا تحتاج معرفة 161° أو تحريك الهاتف إلى زاوية معينة. نقرأ اتجاه الهاتف ونحسب الفرق تلقائيًا." : "You do not need to know 161° or point your phone to a fixed angle. We read your heading and calculate the difference automatically.") : (language === "ar" ? "فعّل الموقع ليبدأ الحساب التلقائي للقبلة." : "Enable location to start automatic Qibla calculation.")}</Text></View>
-              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (userLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{userLocation && headingReady ? (language === "ar" ? `البوصلة جاهزة · ${headingSource === "gps" ? "اتجاه حقيقي" : "حساس الهاتف"}${headingAccuracy !== null ? ` · دقة ${Math.round(headingAccuracy)}°` : ""}` : `Compass ready · ${headingSource === "gps" ? "true heading" : "phone sensor"}`) : (language === "ar" ? "جارٍ تشغيل الموقع والحساس تلقائيًا" : "Starting location and sensors automatically")}</Text></View>
-              {!locationEnabled && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
+              <View style={styles.qiblaStats}><View><Text style={styles.qiblaStatValue}>{qiblaBearing === null ? "—" : `${Math.round(qiblaBearing)}°`}</Text><Text style={styles.qiblaStatLabel}>{language === "ar" ? "زاوية القبلة من الشمال الحقيقي" : "Qibla bearing from true north"}</Text></View></View>
+              <View style={styles.qiblaAutoNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.teal} /><Text style={styles.qiblaAutoNoteText}>{qiblaInstruction}</Text></View>
+              <View style={styles.compassStatus}><View style={[styles.compassStatusDot, (hasQiblaLocation && headingReady) ? styles.compassStatusReady : styles.compassStatusWaiting]} /><Text style={styles.compassStatusText}>{compassStatusText}</Text></View>
+              {!hasQiblaLocation && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
               <View style={styles.accountHero}><View style={styles.accountHeroIcon}><Ionicons name={meQuery.data ? "person" : "person-outline"} size={27} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{meQuery.data ? (language === "ar" ? `أهلًا ${meQuery.data.name || "بك"}` : `Welcome ${meQuery.data.name || ""}`) : ui.accountTitle}</Text><Text style={styles.modalHint}>{meQuery.data ? (language === "ar" ? "حسابك جاهز لإضافة الأماكن وكتابة التقييمات." : "Your account is ready for adding places and reviews.") : (language === "ar" ? "الحساب اختياري. تحتاجه فقط لإضافة مكان أو كتابة تقييم." : ui.accountHint)}</Text></View>
