@@ -3,6 +3,7 @@ import {
   bearingToKaaba,
   getCompassAccuracyLevel,
   getQiblaRotation,
+  isQiblaAligned,
   isReliableCompassAccuracy,
   smoothCompassHeading,
 } from "../lib/prayerTimes";
@@ -16,6 +17,14 @@ describe("qibla compass", () => {
     expect(getQiblaRotation(10, 350)).toBeCloseTo(20, 5);
     expect(getQiblaRotation(350, 10)).toBeCloseTo(-20, 5);
     expect(getQiblaRotation(160, 170)).toBeCloseTo(-10, 5);
+  });
+
+  it("reports alignment only when the red line is close to the Kaaba marker", () => {
+    expect(isQiblaAligned(0)).toBe(true);
+    expect(isQiblaAligned(7)).toBe(true);
+    expect(isQiblaAligned(-7)).toBe(true);
+    expect(isQiblaAligned(7.1)).toBe(false);
+    expect(isQiblaAligned(null)).toBe(false);
   });
 
   it("rejects sentinel and out-of-range headings instead of inventing a rotation", () => {

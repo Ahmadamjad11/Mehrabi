@@ -95,6 +95,9 @@ export const getQiblaRotation = (qiblaBearing: number, heading: number) => {
   return ((normalizeCompassHeading(qiblaBearing) - normalizeCompassHeading(heading) + 540) % 360) - 180;
 };
 
+export const isQiblaAligned = (rotation: number | null, tolerance = 7) =>
+  rotation !== null && Number.isFinite(rotation) && Number.isFinite(tolerance) && tolerance >= 0 && Math.abs(rotation) <= tolerance;
+
 export const getCompassAccuracyLevel = (accuracy: number | null) => {
   switch (accuracy) {
     case 3:
