@@ -115,6 +115,8 @@ const config: ExpoConfig & { logoUrl: string } = {
     [
       "expo-notifications",
       {
+        icon: "./assets/images/notification-icon.png",
+        color: "#D4AF37",
         sounds: ["./assets/mehrabi_reminder.wav"],
       },
     ],
