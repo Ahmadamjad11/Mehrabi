@@ -1,3 +1,5 @@
+import { getOpeningHoursStatus, type OpeningHoursMode, type WeeklyOpeningHours } from "../shared/openingHours";
+
 export type MapLocationKind = "mosque" | "musalla";
 export type MapLocationSource = "community" | "ministry" | "osm";
 
@@ -12,6 +14,9 @@ export type MapLocationCandidate = {
   sourceLabelEn: string;
   osmUrl?: string;
   alternateNames?: string[];
+  hoursMode?: OpeningHoursMode;
+  weeklyHours?: WeeklyOpeningHours | null;
+  isTemporarilyClosed?: boolean;
   open?: boolean | null;
   hasAblution?: boolean;
   hasWomenPrayer?: boolean;
@@ -22,7 +27,13 @@ export type MapLocationCandidate = {
 export type Coordinate = { lat: number; lng: number };
 export type RankedMapLocation = MapLocationCandidate & { distanceMeters: number };
 
-export type CommunityMapPointInput = {
+type OpeningHoursFields = {
+  hoursMode?: OpeningHoursMode;
+  weeklyHours?: WeeklyOpeningHours | null;
+  isTemporarilyClosed?: boolean;
+};
+
+export type CommunityMapPointInput = OpeningHoursFields & {
   id: number;
   name: string;
   type: string;
@@ -35,14 +46,14 @@ export type CommunityMapPointInput = {
   status?: "approved" | "pending" | "rejected";
 };
 
-export type OfficialMapPointInput = {
+export type OfficialMapPointInput = OpeningHoursFields & {
   id: number;
   name: string;
   latitude: number;
   longitude: number;
 };
 
-export type OsmMapFeatureInput = {
+export type OsmMapFeatureInput = OpeningHoursFields & {
   osmType: "node" | "way" | "relation";
   osmId: number;
   osmUrl: string;
@@ -51,10 +62,12 @@ export type OsmMapFeatureInput = {
   alternateNames: string[];
   latitude: number;
   longitude: number;
-  officialMatch: {
+  displayName?: string | null;
+  officialMatch: (OpeningHoursFields & {
     officialName: string;
     officialHasCoordinates: boolean;
-  } | null;
+    displayName?: string | null;
+  }) | null;
 };
 
 const hasValidCoordinates = (latitude: number, longitude: number) =>
@@ -84,43 +97,70 @@ export const buildMapLocationCandidates = (input: {
 }): MapLocationCandidate[] => {
   const community = input.community
     .filter((point) => hasValidCoordinates(point.latitude, point.longitude))
-    .map((point): MapLocationCandidate => ({
-      id: String(point.id),
-      name: point.name,
-      kind: point.type === "mosque" || point.type === "مسجد" ? "mosque" : "musalla",
-      latitude: point.latitude,
-      longitude: point.longitude,
-      source: "community",
-      sourceLabelAr: "مكان معتمد في محرابي",
-      sourceLabelEn: "Approved place in Mehrabi",
-      open: point.open ?? null,
-      hasAblution: point.hasAblution ?? false,
-      hasWomenPrayer: point.hasWomenPrayer ?? false,
-      hasParking: point.hasParking ?? false,
-      status: point.status ?? "approved",
-    }));
+    .map((point): MapLocationCandidate => {
+      const kind = point.type === "mosque" || point.type === "مسجد" ? "mosque" : "musalla";
+      const hoursMode = point.hoursMode ?? (kind === "mosque" ? "prayer_times" : "unknown");
+      const weeklyHours = point.weeklyHours ?? null;
+      const isTemporarilyClosed = point.isTemporarilyClosed ?? false;
+      return {
+        id: String(point.id),
+        name: point.name,
+        kind,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        source: "community",
+        sourceLabelAr: "مكان معتمد في محرابي",
+        sourceLabelEn: "Approved place in Mehrabi",
+        hoursMode,
+        weeklyHours,
+        isTemporarilyClosed,
+        open: point.open ?? getOpeningHoursStatus({ kind, mode: hoursMode, weeklyHours, isTemporarilyClosed }),
+        hasAblution: point.hasAblution ?? false,
+        hasWomenPrayer: point.hasWomenPrayer ?? false,
+        hasParking: point.hasParking ?? false,
+        status: point.status ?? "approved",
+      };
+    });
 
   const official = input.official
     .filter((point) => hasValidCoordinates(point.latitude, point.longitude))
-    .map((point): MapLocationCandidate => ({
-      id: `ministry:${point.id}`,
-      name: point.name,
-      kind: "mosque",
-      latitude: point.latitude,
-      longitude: point.longitude,
-      source: "ministry",
-      sourceLabelAr: "إحداثيات وزارة الأوقاف",
-      sourceLabelEn: "Ministry registry coordinates",
-    }));
+    .map((point): MapLocationCandidate => {
+      const hoursMode = point.hoursMode ?? "prayer_times";
+      const weeklyHours = point.weeklyHours ?? null;
+      const isTemporarilyClosed = point.isTemporarilyClosed ?? false;
+      return {
+        id: `ministry:${point.id}`,
+        name: point.name,
+        kind: "mosque",
+        latitude: point.latitude,
+        longitude: point.longitude,
+        source: "ministry",
+        sourceLabelAr: "إحداثيات وزارة الأوقاف",
+        sourceLabelEn: "Ministry registry coordinates",
+        hoursMode,
+        weeklyHours,
+        isTemporarilyClosed,
+        open: getOpeningHoursStatus({ kind: "mosque", mode: hoursMode, weeklyHours, isTemporarilyClosed }),
+      };
+    });
 
   const osm = input.osm
     .filter((feature) => hasValidCoordinates(feature.latitude, feature.longitude))
     .filter((feature) => !(input.officialMapLoaded && feature.officialMatch?.officialHasCoordinates))
     .map((feature): MapLocationCandidate => {
       const ministryNameMatch = Boolean(feature.officialMatch && !feature.officialMatch.officialHasCoordinates);
-      const name = feature.officialMatch?.officialName
-        || feature.osmName
-        || (feature.kind === "mosque" ? "مسجد غير مسمى من OSM" : "مصلى غير مسمى من OSM");
+      const officialName = feature.officialMatch?.displayName?.trim() || feature.officialMatch?.officialName;
+      const name = feature.displayName?.trim()
+        || officialName
+        || feature.osmName?.trim()
+        || (feature.kind === "mosque" ? "مسجد" : "مصلى");
+      const hoursMode = feature.hoursMode
+        ?? feature.officialMatch?.hoursMode
+        ?? (feature.kind === "mosque" ? "prayer_times" : "unknown");
+      const weeklyHours = feature.weeklyHours ?? feature.officialMatch?.weeklyHours ?? null;
+      const isTemporarilyClosed = feature.isTemporarilyClosed
+        ?? feature.officialMatch?.isTemporarilyClosed
+        ?? false;
       return {
         id: `osm:${feature.osmType}/${feature.osmId}`,
         name,
@@ -131,7 +171,11 @@ export const buildMapLocationCandidates = (input: {
         sourceLabelAr: ministryNameMatch ? "اسم وزارة الأوقاف · الإحداثيات من OSM" : "OpenStreetMap",
         sourceLabelEn: ministryNameMatch ? "Ministry name · OSM coordinates" : "OpenStreetMap",
         osmUrl: feature.osmUrl,
-        alternateNames: feature.alternateNames,
+        alternateNames: [feature.osmName, ...feature.alternateNames].filter((value): value is string => Boolean(value?.trim())),
+        hoursMode,
+        weeklyHours,
+        isTemporarilyClosed,
+        open: getOpeningHoursStatus({ kind: feature.kind, mode: hoursMode, weeklyHours, isTemporarilyClosed }),
       };
     });
 

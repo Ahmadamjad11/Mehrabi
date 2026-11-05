@@ -95,12 +95,17 @@ export default function HomeScreen() {
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [reviewPlaceId, setReviewPlaceId] = useState<number | null>(null);
   const [reviewVisible, setReviewVisible] = useState(false);
+  const [nameSuggestionVisible, setNameSuggestionVisible] = useState(false);
+  const [nameSuggestionPlace, setNameSuggestionPlace] = useState<Place | null>(null);
+  const [suggestedPlaceName, setSuggestedPlaceName] = useState("");
+  const [nameSuggestionError, setNameSuggestionError] = useState<string | null>(null);
+  const [nameSuggestionSuccess, setNameSuggestionSuccess] = useState(false);
+  const nameSuggestionAuthPendingRef = useRef(false);
   const [prayerTimesVisible, setPrayerTimesVisible] = useState(false);
   const [placeName, setPlaceName] = useState("");
   const [placeAddress, setPlaceAddress] = useState("");
   const [placeType, setPlaceType] = useState<"mosque" | "musalla">("mosque");
   const [addStep, setAddStep] = useState<1 | 2>(1);
-  const [placeHours, setPlaceHours] = useState("");
   const [hasAblution, setHasAblution] = useState(false);
   const [hasWomenPrayer, setHasWomenPrayer] = useState(false);
   const [hasParking, setHasParking] = useState(false);
@@ -139,6 +144,29 @@ export default function HomeScreen() {
     nextPrayer: "Next prayer ✦", today: "Today", remaining: "remaining", prayerTimes: "Today's times", guide: "Your guide on the way",
     nearby: "Prayer places near you", search: "Search for a mosque, musalla or area...", mapLocation: "Your location", all: "View list", mosques: "Mosques", musallas: "Musallas", open: "Open now", ablution: "Ablution", women: "Women's prayer", nearest: "Nearest first", verified: "Verified", unverified: "Not verified", unknownHours: "Hours unknown",
     go: "Go", add: "Add a place you know", home: "Home", explore: "Explore", qibla: "Qibla", account: "Account", prayerPrefix: "Prayer", prayerHint: "Never miss a prayer", listTitle: "List", listHint: "You are viewing nearby places.", exploreTitle: "Explore prayer places", exploreHint: "Search and filter by type and services, sorted by distance.", accountTitle: "Account", accountHint: "Sign in to add a place or write a review.", login: "Sign in", logout: "Sign out", emailLogin: "Sign in", emailRegister: "Create account", email: "Email", phone: "Phone number", identifier: "Email or phone number", password: "Password", name: "Full name", forgotPassword: "Forgot password?", sendReset: "Send reset link", resendVerification: "Resend code", createAccount: "Create account", haveAccount: "Already have an account? Sign in", backToLogin: "Back to sign in", verifyHint: "Check your inbox and enter the 6-digit code before signing in.", resetSent: "If this email is registered, you will receive a reset link shortly.", verifySent: "Account created. Check your inbox and enter the code.", admin: "Open admin dashboard", addTitle: "Add a new place", selectLocation: "Select location", placeData: "Place details", pickerHint: "Tap the map to place the pin accurately, or use your current location.", useCurrentLocation: "Use my current location", locationCorrect: "Location is correct, continue", editLocation: "Edit location", namePlaceholder: "Mosque or musalla name", addressPlaceholder: "Address or area", hoursPlaceholder: "Opening hours or unknown", buildingPlaceholder: "Building name (optional)", floorPlaceholder: "Floor (optional)", submit: "Submit for review", submitting: "Submitting...", editPlace: "Place", parking: "Parking", reviewTitle: "Add your review", reviewPlaceholder: "Write a comment (optional)", publishReview: "Publish review", loadMore: "Load 20 more places", nearbyCount: "nearby places",
+  };
+  const nameSuggestionCopy = language === "ar" ? {
+    title: "اقتراح تعديل الاسم",
+    button: "اقتراح تعديل الاسم",
+    currentName: "الاسم الحالي",
+    input: "اكتب الاسم الصحيح للمسجد أو المصلى",
+    hint: "سيصل اقتراحك إلى الإدارة للمراجعة. لن يتغير الاسم الظاهر حتى يعتمده المدير.",
+    send: "إرسال الاقتراح",
+    sending: "جارٍ إرسال الاقتراح...",
+    sent: "وصل اقتراحك إلى الإدارة للمراجعة. الاسم الحالي لم يتغير.",
+    close: "تم",
+    tooShort: "اكتب اسمًا لا يقل عن حرفين.",
+  } : {
+    title: "Suggest a name correction",
+    button: "Suggest a name correction",
+    currentName: "Current name",
+    input: "Enter the correct mosque or musalla name",
+    hint: "Your suggestion will be reviewed by the administration. The displayed name will not change until approved.",
+    send: "Send suggestion",
+    sending: "Sending suggestion...",
+    sent: "Your suggestion was sent for review. The current name has not changed.",
+    close: "Done",
+    tooShort: "Enter a name with at least two characters.",
   };
   const filterOptions = [
     { key: "nearest", label: ui.nearest, icon: "navigate-outline" },
@@ -216,8 +244,16 @@ export default function HomeScreen() {
   const meQuery = trpc.auth.me.useQuery();
   const logoutMutation = trpc.auth.logout.useMutation();
   const nearestPlaces = trpc.places.nearest.useMutation();
-  const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); setPlaceHours(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
+  const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
   const submitReview = trpc.places.review.useMutation({ onSuccess: () => { setReviewVisible(false); setReviewComment(""); } });
+  const suggestNameMutation = trpc.places.suggestName.useMutation();
+
+  useEffect(() => {
+    if (!nameSuggestionAuthPendingRef.current || !meQuery.data) return;
+    nameSuggestionAuthPendingRef.current = false;
+    setEmailAuthVisible(false);
+    setNameSuggestionVisible(true);
+  }, [meQuery.data]);
 
   const queuePrayerReminderSync = useCallback((enabled: boolean, minutes: number, location: { lat: number; lng: number } | null) => {
     const jordanToday = getJordanCalendarDate(new Date());
@@ -611,6 +647,62 @@ export default function HomeScreen() {
     setEmailAuthVisible(true);
   };
 
+  const openNameSuggestion = (place: Place) => {
+    setNameSuggestionPlace(place);
+    setSuggestedPlaceName("");
+    setNameSuggestionError(null);
+    setNameSuggestionSuccess(false);
+    if (meQuery.data) {
+      setNameSuggestionVisible(true);
+    } else {
+      nameSuggestionAuthPendingRef.current = true;
+      openEmailAuth("login");
+    }
+  };
+
+  const closeNameSuggestion = () => {
+    setNameSuggestionVisible(false);
+    setNameSuggestionPlace(null);
+    setSuggestedPlaceName("");
+    setNameSuggestionError(null);
+    setNameSuggestionSuccess(false);
+  };
+
+  const sendNameSuggestion = async () => {
+    const place = nameSuggestionPlace;
+    const proposedName = suggestedPlaceName.trim();
+    if (!place) return;
+    if (proposedName.length < 2) {
+      setNameSuggestionError(nameSuggestionCopy.tooShort);
+      return;
+    }
+    setNameSuggestionError(null);
+    try {
+      if (place.source === "community") {
+        const placeId = Number(place.id);
+        if (!Number.isSafeInteger(placeId) || placeId <= 0) throw new Error("تعذر تحديد المكان للمراجعة.");
+        await suggestNameMutation.mutateAsync({ source: "community", placeId, suggestedName: proposedName });
+      } else if (place.source === "ministry") {
+        const placeId = Number(place.id.replace(/^ministry:/, ""));
+        if (!Number.isSafeInteger(placeId) || placeId <= 0) throw new Error("تعذر تحديد المكان للمراجعة.");
+        await suggestNameMutation.mutateAsync({ source: "official", placeId, suggestedName: proposedName });
+      } else {
+        const osmKey = place.id.replace(/^osm:/, "");
+        await suggestNameMutation.mutateAsync({ source: "osm", osmKey, suggestedName: proposedName });
+      }
+      setNameSuggestionSuccess(true);
+      setSuggestedPlaceName("");
+    } catch (error) {
+      setNameSuggestionError(error instanceof Error ? error.message : (language === "ar" ? "تعذر إرسال الاقتراح." : "Could not send the suggestion."));
+    }
+  };
+
+  const closeEmailAuth = () => {
+    nameSuggestionAuthPendingRef.current = false;
+    setEmailAuthVisible(false);
+    setNameSuggestionPlace(null);
+  };
+
   const submitEmailAuth = async () => {
     if (emailAuthNeedsOtp && !/^\d{6}$/.test(emailAuthOtp)) {
       setEmailAuthError(language === "ar" ? "أدخل رمز التحقق المكوّن من 6 أرقام." : "Enter the 6-digit verification code.");
@@ -851,6 +943,7 @@ export default function HomeScreen() {
             <View style={styles.placeActions}>
               {place.source === "community" && <Pressable onPress={() => toggleFavorite(place.id)} style={styles.iconAction}><Ionicons name={favorites.includes(place.id) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.id) ? COLORS.red : COLORS.muted} /></Pressable>}
               {place.source === "community" && <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else openEmailAuth("login"); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>}
+              <Pressable onPress={() => openNameSuggestion(place)} style={styles.suggestNameButton} accessibilityRole="button" accessibilityLabel={nameSuggestionCopy.button}><Ionicons name="create-outline" size={14} color={COLORS.green} /><Text style={styles.suggestNameText} numberOfLines={1}>{nameSuggestionCopy.button}</Text></Pressable>
               <Pressable onPress={() => sharePlace(place)} style={styles.iconAction}><Ionicons name="share-social-outline" size={18} color={COLORS.muted} /></Pressable>
               <Pressable onPress={() => openMaps(place)} style={styles.goButton}><Ionicons name="navigate" size={16} color={COLORS.white} /><Text style={styles.goText}>{language === "ar" ? "الطريق" : "Directions"}</Text></Pressable>
             </View>
@@ -914,9 +1007,9 @@ export default function HomeScreen() {
           </View>
         </View></View>
       </Modal>
-      <Modal visible={emailAuthVisible} animationType="slide" transparent onRequestClose={() => setEmailAuthVisible(false)}>
+      <Modal visible={emailAuthVisible} animationType="slide" transparent onRequestClose={closeEmailAuth}>
         <View style={styles.modalBackdrop}><View style={styles.modalCard}>
-          <Pressable style={styles.modalClose} onPress={() => setEmailAuthVisible(false)}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
+          <Pressable style={styles.modalClose} onPress={closeEmailAuth}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
           <Text style={styles.modalTitle}>{emailAuthNeedsOtp ? (language === "ar" ? "تأكيد البريد الإلكتروني" : "Verify your email") : emailAuthMode === "register" ? ui.emailRegister : emailAuthMode === "forgot" ? ui.forgotPassword : ui.emailLogin}</Text>
           {!emailAuthNeedsOtp && emailAuthMode === "register" && <TextInput value={emailAuthName} onChangeText={setEmailAuthName} placeholder={ui.name} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" autoCapitalize="words" />}
           {!emailAuthNeedsOtp && emailAuthMode === "register" && <TextInput value={emailAuthPhone} onChangeText={setEmailAuthPhone} placeholder={ui.phone} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="left" keyboardType="phone-pad" autoCapitalize="none" autoCorrect={false} />}
@@ -948,13 +1041,27 @@ export default function HomeScreen() {
             <TextInput value={placeName} onChangeText={setPlaceName} placeholder={ui.namePlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />
             <TextInput value={placeAddress} onChangeText={setPlaceAddress} placeholder={ui.addressPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />
             <View style={styles.typeRow}><Pressable style={[styles.typeButton, placeType === "mosque" && styles.typeButtonActive]} onPress={() => setPlaceType("mosque")}><Text style={styles.typeText}>{ui.mosques}</Text></Pressable><Pressable style={[styles.typeButton, placeType === "musalla" && styles.typeButtonActive]} onPress={() => setPlaceType("musalla")}><Text style={styles.typeText}>{ui.musallas}</Text></Pressable></View>
-            <TextInput value={placeHours} onChangeText={setPlaceHours} placeholder={ui.hoursPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />
+            <Text style={styles.modalHint}>{language === "ar" ? "لا تدخل ساعات العمل هنا؛ يراجع المدير المكان ويحدد ساعات المصلى، أما المسجد فيُعرض أنه يفتح وقت الصلوات." : "Do not enter hours here. An administrator reviews the place and sets musalla hours; mosques are listed as open for prayer times."}</Text>
             {placeType === "musalla" && <><TextInput value={buildingName} onChangeText={setBuildingName} placeholder={ui.buildingPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" /><TextInput value={buildingFloor} onChangeText={setBuildingFloor} placeholder={ui.floorPlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" /></>}
             <View style={styles.checkRow}><Pressable onPress={() => setHasAblution(!hasAblution)} style={[styles.checkButton, hasAblution && styles.checkButtonActive]}><Text style={styles.typeText}>{hasAblution ? "✓ " : ""}{ui.ablution}</Text></Pressable><Pressable onPress={() => setHasWomenPrayer(!hasWomenPrayer)} style={[styles.checkButton, hasWomenPrayer && styles.checkButtonActive]}><Text style={styles.typeText}>{hasWomenPrayer ? "✓ " : ""}{ui.women}</Text></Pressable><Pressable onPress={() => setHasParking(!hasParking)} style={[styles.checkButton, hasParking && styles.checkButtonActive]}><Text style={styles.typeText}>{hasParking ? "✓ " : ""}{ui.parking}</Text></Pressable></View>
             <Pressable style={styles.secondaryModalButton} onPress={() => setAddStep(1)}><Text style={styles.secondaryModalText}>{ui.editLocation}</Text></Pressable>
-            <Pressable style={styles.primaryModalButton} disabled={submitPlace.isPending || !placeName.trim()} onPress={() => submitPlace.mutate({ name: placeName, type: placeType, address: placeAddress, hours: placeHours || "غير معروفة", description: buildingName ? `المبنى: ${buildingName}، الطابق: ${buildingFloor || "غير محدد"}` : undefined, latitude: userLocation?.lat ?? 31.9539, longitude: userLocation?.lng ?? 35.9106, hasAblution, hasWomenPrayer, hasParking })}><Text style={styles.primaryModalText}>{submitPlace.isPending ? ui.submitting : ui.submit}</Text></Pressable>
+            <Pressable style={styles.primaryModalButton} disabled={submitPlace.isPending || !placeName.trim()} onPress={() => submitPlace.mutate({ name: placeName, type: placeType, address: placeAddress, description: buildingName ? `المبنى: ${buildingName}، الطابق: ${buildingFloor || "غير محدد"}` : undefined, latitude: userLocation?.lat ?? 31.9539, longitude: userLocation?.lng ?? 35.9106, hasAblution, hasWomenPrayer, hasParking })}><Text style={styles.primaryModalText}>{submitPlace.isPending ? ui.submitting : ui.submit}</Text></Pressable>
             {submitError && <Text style={styles.formError}>{submitError}</Text>}
           </>}
+        </View></View>
+      </Modal>
+      <Modal visible={nameSuggestionVisible} animationType="slide" transparent onRequestClose={closeNameSuggestion}>
+        <View style={styles.modalBackdrop}><View style={styles.modalCard}>
+          <Pressable style={styles.modalClose} onPress={closeNameSuggestion}><Ionicons name="close" size={22} color={COLORS.navy} /></Pressable>
+          <Text style={styles.modalTitle}>{nameSuggestionCopy.title}</Text>
+          {nameSuggestionPlace && <Text style={styles.modalHint}>{nameSuggestionCopy.currentName}: {nameSuggestionPlace.name}</Text>}
+          {!nameSuggestionSuccess && <TextInput value={suggestedPlaceName} onChangeText={setSuggestedPlaceName} placeholder={nameSuggestionCopy.input} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" maxLength={255} autoCorrect={false} accessibilityLabel={nameSuggestionCopy.input} />}
+          <Text style={styles.modalHint}>{nameSuggestionCopy.hint}</Text>
+          {nameSuggestionError && <Text style={styles.formError}>{nameSuggestionError}</Text>}
+          {nameSuggestionSuccess && <Text style={styles.formSuccess}>{nameSuggestionCopy.sent}</Text>}
+          {nameSuggestionSuccess
+            ? <Pressable style={styles.primaryModalButton} onPress={closeNameSuggestion}><Text style={styles.primaryModalText}>{nameSuggestionCopy.close}</Text></Pressable>
+            : <Pressable style={styles.primaryModalButton} disabled={suggestNameMutation.isPending} onPress={() => void sendNameSuggestion()}><Text style={styles.primaryModalText}>{suggestNameMutation.isPending ? nameSuggestionCopy.sending : nameSuggestionCopy.send}</Text></Pressable>}
         </View></View>
       </Modal>
       <Modal visible={reviewVisible} animationType="slide" transparent onRequestClose={() => setReviewVisible(false)}>

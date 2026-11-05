@@ -24,6 +24,7 @@ beforeEach(() => {
   // a platform URL cannot leak into a case that intentionally exercises only loopback data.
   vi.stubEnv("EXPO_PACKAGER_PROXY_URL", "");
   vi.stubEnv("EXPO_WEB_PREVIEW_URL", "");
+  vi.stubEnv("EXPO_PUBLIC_API_BASE_URL", "");
 });
 
 afterEach(async () => {
@@ -209,6 +210,25 @@ describe("Mobile API origin and cookie isolation", () => {
         secure: true,
       });
     }
+  });
+
+  it("marks the session cookie secure when the known public API is HTTPS behind an HTTP proxy", () => {
+    vi.stubEnv("EXPO_PUBLIC_API_BASE_URL", "https://3000-sandbox.preview.example.test");
+    const options = getSessionCookieOptions({
+      protocol: "http",
+      headers: {},
+      hostname: "3000-sandbox.preview.example.test",
+    } as Request);
+    expect(options).toMatchObject({ sameSite: "none", secure: true, httpOnly: true });
+  });
+
+  it("keeps a plain local HTTP session cookie compatible with local development", () => {
+    const options = getSessionCookieOptions({
+      protocol: "http",
+      headers: {},
+      hostname: "127.0.0.1",
+    } as Request);
+    expect(options).toMatchObject({ sameSite: "lax", secure: false, httpOnly: true });
   });
 
   it("ignores the old parent-domain cookie when the project cookie is also present", () => {

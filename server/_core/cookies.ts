@@ -7,6 +7,16 @@ import {
 function isSecureRequest(req: Request) {
   if (req.protocol === "https") return true;
 
+  const publicApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (publicApiUrl) {
+    try {
+      const url = new URL(publicApiUrl);
+      if (url.protocol === "https:" && url.hostname.toLowerCase() === req.hostname.toLowerCase()) return true;
+    } catch {
+      // Ignore a malformed optional public-origin value and check the proxy header below.
+    }
+  }
+
   const forwardedProto = req.headers["x-forwarded-proto"];
   if (!forwardedProto) return false;
 

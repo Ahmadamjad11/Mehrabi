@@ -85,6 +85,20 @@
       "when": 1792486393234,
       "tag": "0011_add_user_session_version",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1793787941600,
+      "tag": "0012_amazing_bromley",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1793829338732,
+      "tag": "0013_add_place_name_suggestions",
+      "breakpoints": true
     }
   ]
 }

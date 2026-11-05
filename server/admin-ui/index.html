@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#102d4a" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>محرابي | إدارة الأماكن</title>
+    <link rel="stylesheet" href="/admin-assets/admin.css" />
+    <script src="/admin-assets/admin.js" defer></script>
+  </head>
+  <body>
+    <main class="page-shell">
+      <section id="login-panel" class="login-panel" aria-labelledby="login-title">
+        <div class="brand-mark" aria-hidden="true">م</div>
+        <p class="eyebrow">محرابي · إدارة داخلية</p>
+        <h1 id="login-title">دخول المدير</h1>
+        <p class="muted">سجّل الدخول بحساب محرابي المخوّل للإدارة. تُحمى بيانات الجلسة داخل كوكي آمن ولا تُحفظ كلمة المرور على هذا الجهاز.</p>
+        <form id="login-form" autocomplete="on">
+          <label for="login-email">البريد الإلكتروني</label>
+          <input id="login-email" name="email" type="email" autocomplete="username" required maxlength="320" dir="ltr" />
+          <label for="login-password">كلمة المرور</label>
+          <input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="128" />
+          <p id="login-error" class="message error" role="alert" hidden></p>
+          <button id="login-button" class="button primary" type="submit">تسجيل الدخول</button>
+        </form>
+      </section>
+
+      <section id="dashboard" class="dashboard" hidden>
+        <header class="topbar">
+          <div class="brand-lockup">
+            <div class="brand-mark small" aria-hidden="true">م</div>
+            <div><p class="eyebrow">محرابي · لوحة ويب منفصلة</p><h1>إدارة الأماكن</h1></div>
+          </div>
+          <div class="session-actions"><span id="session-user" class="session-user"></span><button id="logout-button" class="button quiet" type="button">تسجيل الخروج</button></div>
+        </header>
+
+        <div class="intro-card">
+          <div><p class="eyebrow">بيانات المصادر</p><h2>صحّح الاسم واضبط الدوام</h2><p>أسماء الوزارة وOSM الأصلية تبقى محفوظة. الجوامع تعمل وقت الصلوات، والمصليات تُدار بجدول أسبوعي. لا تعرض اللوحة بيانات مصدر غير موثقة كحقيقة.</p></div>
+          <div class="policy-badge"><span class="status-dot"></span><span>كل تعديل يحتاج صلاحية مدير</span></div>
+        </div>
+
+        <nav class="source-tabs" aria-label="مصدر المكان">
+          <button class="source-tab active" type="button" data-source="official">سجلات الوزارة <span id="official-count" class="tab-count">—</span></button>
+          <button class="source-tab" type="button" data-source="osm">معالم OpenStreetMap <span id="osm-count" class="tab-count">1,003</span></button>
+          <button class="source-tab" type="button" data-source="community">أماكن المجتمع <span id="community-count" class="tab-count">—</span></button>
+          <button class="source-tab" type="button" data-source="moderation">مراجعة الأماكن</button>
+          <button class="source-tab" type="button" data-source="reviews">مراجعة التعليقات</button>
+          <button class="source-tab" type="button" data-source="name-suggestions">اقتراحات الأسماء</button>
+        </nav>
+
+        <section class="catalog-panel" aria-labelledby="catalog-title">
+          <div class="catalog-heading">
+            <div><p class="eyebrow">بحث وتعديل</p><h2 id="catalog-title">سجلات الوزارة</h2><p id="catalog-hint" class="muted">ابحث بالاسم أو المحافظة أو المديرية أو المنطقة.</p></div>
+            <div id="result-count" class="result-count">—</div>
+          </div>
+          <form id="search-form" class="search-row" role="search">
+            <label class="sr-only" for="search-input">ابحث عن اسم أو منطقة</label>
+            <input id="search-input" type="search" maxlength="100" placeholder="اكتب اسم المسجد أو المنطقة" autocomplete="off" />
+            <button class="button primary" type="submit">بحث</button>
+            <button id="clear-search" class="button secondary" type="button">مسح</button>
+          </form>
+          <div id="moderation-controls" class="search-row" hidden>
+            <label for="place-status-filter">حالة الأماكن</label>
+            <select id="place-status-filter">
+              <option value="pending">بانتظار المراجعة</option><option value="approved">معتمد</option>
+              <option value="rejected">مرفوض</option><option value="deleted">محذوف</option><option value="all">الكل</option>
+            </select>
+            <button id="approve-all-button" class="button primary" type="button">اعتماد كل المعلّق</button>
+          </div>
+          <div id="review-controls" class="search-row" hidden>
+            <label for="review-status-filter">حالة التعليقات</label>
+            <select id="review-status-filter">
+              <option value="reported">مبلّغ عنه</option><option value="visible">ظاهر</option>
+              <option value="hidden">مخفي</option><option value="all">الكل</option>
+            </select>
+          </div>
+          <div id="name-suggestion-controls" class="search-row" hidden>
+            <label for="name-suggestion-status-filter">حالة اقتراحات الاسم</label>
+            <select id="name-suggestion-status-filter">
+              <option value="pending">بانتظار المراجعة</option><option value="approved">معتمد</option>
+              <option value="rejected">مرفوض</option><option value="all">الكل</option>
+            </select>
+          </div>
+          <p class="guidance"><strong>سياسة الدوام:</strong> الجوامع «يفتح وقت الصلوات»؛ لا نحسبها مفتوحة الآن خارج موعد صلاة معلوم. ساعات المصليات تُدخل يومًا بيوم، وتبقى الأيام الفارغة غير محددة.</p>
+          <p id="page-message" class="message" role="status" aria-live="polite"></p>
+          <div id="catalog-list" class="catalog-list" aria-live="polite"></div>
+          <div class="pagination">
+            <button id="previous-page" class="button secondary" type="button">السابق</button>
+            <span id="page-label" class="page-label">—</span>
+            <button id="next-page" class="button secondary" type="button">التالي</button>
+          </div>
+        </section>
+        <footer class="footer-note">لوحة مستقلة عن تطبيق الهاتف · أوقات المصليات بتوقيت عمّان · © محرابي</footer>
+      </section>
+    </main>
+  </body>
+</html>

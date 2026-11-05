@@ -1,18 +1,25 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import osmMosqueMapData from "../data/osm_mosque_map_points.json";
 import { currentSessionCookie, getSessionCookieName, getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import {
   addReview,
   approveAllPendingPlaces,
+  createPlaceNameSuggestion,
   createPlace,
+  getDatabaseNameSuggestionTarget,
+  getOfficialDisplayNameOverride,
+  getOsmNameOverride,
   deletePlace,
   getFavoritePlaceIds,
   getPlaceById,
   listAllPlaces,
+  listOfficialMosquePublicOverrides,
   listOfficialMosques,
   listOfficialMosqueMapPoints,
+  listOsmPlaceOverrides,
   listPlaces,
   listPublicMapPoints,
   listPublicPlaces,
@@ -22,7 +29,12 @@ import {
   updatePlaceStatus,
   updateReviewStatus,
   revokeSessionToken,
+  type PlaceNameSuggestionTarget,
 } from "./db";
+import { getOpeningHoursStatus } from "../shared/openingHours";
+import { effectivePlaceName, isUnchangedPlaceName } from "../shared/placeNameSuggestions";
+
+const osmNameSuggestionFeatures = osmMosqueMapData.features;
 
 const placeInput = z.object({
   name: z.string().min(2).max(255),
@@ -32,7 +44,6 @@ const placeInput = z.object({
   address: z.string().max(500).optional(),
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
-  hours: z.string().max(255).optional(),
   hasAblution: z.boolean().default(false),
   hasWomenPrayer: z.boolean().default(false),
   hasParking: z.boolean().default(false),
@@ -58,7 +69,12 @@ function filterPublicPlaces(rows: Awaited<ReturnType<typeof listPublicPlaces>>, 
   const search = input.search?.trim().toLowerCase();
   return rows.filter((place) => {
     if (search && !`${place.name} ${place.nameEn ?? ""} ${place.address ?? ""}`.toLowerCase().includes(search)) return false;
-    if (input.openNow && !place.hours?.includes("مفتوح") && !place.hours?.toLowerCase().includes("open")) return false;
+    if (input.openNow && getOpeningHoursStatus({
+      kind: place.type === "mosque" ? "mosque" : "musalla",
+      mode: place.hoursMode,
+      weeklyHours: place.weeklyHours,
+      isTemporarilyClosed: place.isTemporarilyClosed,
+    }) !== true) return false;
     if (input.hasAblution && !place.hasAblution) return false;
     if (input.hasWomenPrayer && !place.hasWomenPrayer) return false;
     if (input.hasParking && !place.hasParking) return false;
@@ -105,12 +121,13 @@ async function findDuplicatePlace(input: z.infer<typeof placeInput>) {
     .map((place) => ({ place, distance: distanceMeters(input.latitude, input.longitude, place.latitude, place.longitude) }))
     .sort((a, b) => a.distance - b.distance)
     .find(({ place, distance }) => {
+      const currentName = effectivePlaceName(place.displayName, place.name);
       // A very close pin is almost certainly the same physical place, even if
       // two contributors used different spellings for its name.
       if (distance <= 35) return true;
       // At a wider radius require the same type and a similar name to avoid
       // merging two genuinely different mosques in dense neighborhoods.
-      return distance <= 120 && place.type === input.type && namesLookSimilar(place.name, input.name);
+      return distance <= 120 && place.type === input.type && namesLookSimilar(currentName, input.name);
     });
 }
 
@@ -156,10 +173,18 @@ export const appRouter = router({
         const statusText = duplicate.place.status === "pending" ? "قيد المراجعة" : "مضاف بالفعل";
         throw new TRPCError({
           code: "CONFLICT",
-          message: `هذا المكان ${statusText}: «${duplicate.place.name}»، ويبعد حوالي ${Math.max(1, Math.round(duplicate.distance))} متر. لم يتم إنشاء نسخة مكررة.`,
+          message: `هذا المكان ${statusText}: «${effectivePlaceName(duplicate.place.displayName, duplicate.place.name)}»، ويبعد حوالي ${Math.max(1, Math.round(duplicate.distance))} متر. لم يتم إنشاء نسخة مكررة.`,
         });
       }
-      return createPlace({ ...input, status: "pending", createdBy: ctx.user.id });
+      return createPlace({
+        ...input,
+        hours: "غير محددة",
+        hoursMode: input.type === "mosque" ? "prayer_times" : "unknown",
+        weeklyHours: null,
+        isTemporarilyClosed: false,
+        status: "pending",
+        createdBy: ctx.user.id,
+      });
     }),
     favoriteIds: protectedProcedure
       .input(z.object({ userId: z.number().int().positive() }))
@@ -185,6 +210,56 @@ export const appRouter = router({
         }
         return addReview({ ...input, userId: ctx.user.id });
       }),
+    suggestName: protectedProcedure
+      .input(z.discriminatedUnion("source", [
+        z.object({ source: z.literal("community"), placeId: z.number().int().positive(), suggestedName: z.string().trim().min(2).max(255) }).strict(),
+        z.object({ source: z.literal("official"), placeId: z.number().int().positive(), suggestedName: z.string().trim().min(2).max(255) }).strict(),
+        z.object({ source: z.literal("osm"), osmKey: z.string().regex(/^(?:node|way|relation)\/\d{1,20}$/), suggestedName: z.string().trim().min(2).max(255) }).strict(),
+      ]))
+      .mutation(async ({ ctx, input }) => {
+        let target: PlaceNameSuggestionTarget | null = null;
+        if (input.source === "community" || input.source === "official") {
+          target = await getDatabaseNameSuggestionTarget(input.source, input.placeId);
+        } else {
+          const feature = osmNameSuggestionFeatures.find((item) => `${item.osmType}/${item.osmId}` === input.osmKey);
+          if (!feature || (feature.kind !== "mosque" && feature.kind !== "musalla")) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "المكان غير موجود في مصدر الخريطة الحالي." });
+          }
+          const [osmOverride, officialOverride] = await Promise.all([
+            getOsmNameOverride(input.osmKey),
+            feature.officialMatch ? getOfficialDisplayNameOverride(feature.officialMatch.sourceKey) : Promise.resolve(null),
+          ]);
+          const matchedOfficialName = feature.officialMatch
+            ? officialOverride?.trim() || feature.officialMatch.officialName
+            : null;
+          target = {
+            source: "osm" as const,
+            sourceKey: input.osmKey,
+            currentName: osmOverride?.trim() || matchedOfficialName || feature.osmName?.trim() || (feature.kind === "mosque" ? "مسجد" : "مصلى"),
+            targetKind: feature.kind as "mosque" | "musalla",
+            targetArea: null,
+            targetLatitude: feature.latitude,
+            targetLongitude: feature.longitude,
+            targetUrl: feature.osmUrl,
+          };
+        }
+
+        if (!target) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "المكان غير موجود أو لم يعد معتمدًا على الخريطة." });
+        }
+        if (isUnchangedPlaceName(target.currentName, input.suggestedName)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "الاسم المقترح مطابق للاسم الحالي. أدخل تصحيحًا مختلفًا." });
+        }
+        const created = await createPlaceNameSuggestion({
+          userId: ctx.user.id,
+          target,
+          suggestedName: input.suggestedName,
+        });
+        if (!created) {
+          throw new TRPCError({ code: "CONFLICT", message: "لديك اقتراح قيد المراجعة لهذا المكان بالفعل." });
+        }
+        return { success: true, status: "pending" as const };
+      }),
   }),
   officialMosques: router({
     list: publicProcedure
@@ -197,6 +272,10 @@ export const appRouter = router({
       )
       .query(({ input }) => listOfficialMosques(input ?? { limit: 25, offset: 0 })),
     mapPoints: publicProcedure.query(() => listOfficialMosqueMapPoints()),
+    displayOverrides: publicProcedure.query(() => listOfficialMosquePublicOverrides()),
+  }),
+  osmOverrides: router({
+    list: publicProcedure.query(() => listOsmPlaceOverrides()),
   }),
   admin: router({
     pendingPlaces: adminProcedure.query(() => listPlaces("pending")),

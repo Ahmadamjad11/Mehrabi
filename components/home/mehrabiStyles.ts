@@ -155,6 +155,8 @@ export const styles = StyleSheet.create({
   amenity: { color: COLORS.muted, fontSize: 10 },
   placeActions: { borderTopWidth: 1, borderTopColor: "#F0F3F5", marginTop: 11, paddingTop: 9, flexDirection: "row-reverse", alignItems: "center", gap: 7 },
   iconAction: { width: 31, height: 31, borderRadius: 9, backgroundColor: COLORS.canvas, alignItems: "center", justifyContent: "center" },
+  suggestNameButton: { minHeight: 31, maxWidth: 142, borderRadius: 9, paddingHorizontal: 8, backgroundColor: "#EFF8F6", borderWidth: 1, borderColor: "#D7E9E5", flexDirection: "row-reverse", alignItems: "center", justifyContent: "center", gap: 4 },
+  suggestNameText: { color: COLORS.green, fontSize: 9, fontWeight: "800", flexShrink: 1 },
   goButton: { marginRight: "auto", backgroundColor: COLORS.navy, borderRadius: 9, height: 31, paddingHorizontal: 11, flexDirection: "row-reverse", alignItems: "center", gap: 5 },
   goText: { color: COLORS.white, fontSize: 10, fontWeight: "800" },
   addPlaceButton: { height: 46, borderRadius: 13, borderWidth: 1, borderColor: "#D6E0E5", borderStyle: "dashed", alignItems: "center", justifyContent: "center", flexDirection: "row-reverse", gap: 7, marginTop: 2 },
