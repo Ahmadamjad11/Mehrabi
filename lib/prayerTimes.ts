@@ -54,6 +54,19 @@ export const formatCountdown = (target: Date, now: Date) => {
   return `${hours}:${minutes}:${rest}`;
 };
 
+export const getPrayerProgress = (previousPrayerTime: Date, nextPrayerTime: Date, now: Date) => {
+  const previous = previousPrayerTime.getTime();
+  const next = nextPrayerTime.getTime();
+  const current = now.getTime();
+  const duration = next - previous;
+
+  if (!Number.isFinite(previous) || !Number.isFinite(next) || !Number.isFinite(current) || duration <= 0) {
+    return 0;
+  }
+
+  return Math.min(1, Math.max(0, (current - previous) / duration));
+};
+
 export const bearingToKaaba = (latitude: number, longitude: number) => {
   const targetLat = (21.4225 * Math.PI) / 180;
   const currentLat = (latitude * Math.PI) / 180;

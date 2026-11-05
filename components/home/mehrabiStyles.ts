@@ -53,7 +53,7 @@ export const styles = StyleSheet.create({
   countdown: { color: COLORS.white, fontSize: 24, fontWeight: "800", letterSpacing: 0.5 },
   countdownCaption: { color: "#9FB6C7", fontSize: 10, marginTop: 2 },
   progressTrack: { height: 4, backgroundColor: "#2C4C68", borderRadius: 4, marginTop: 19, overflow: "hidden" },
-  progressFill: { height: 4, width: "44%", backgroundColor: COLORS.gold, borderRadius: 4 },
+  progressFill: { height: 4, backgroundColor: COLORS.gold, borderRadius: 4 },
   prayerFooter: { flexDirection: "row-reverse", justifyContent: "space-between", alignItems: "center", marginTop: 12 },
   nextHint: { color: "#8BA4B8", fontSize: 10 },
   prayerLink: { color: COLORS.gold, fontSize: 11, fontWeight: "700" },
