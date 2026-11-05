@@ -13,10 +13,11 @@ const osmFeature = (overrides: Partial<{
   osmUrl: string;
   kind: "mosque" | "musalla";
   osmName: string | null;
+  displayName: string | null;
   alternateNames: string[];
   latitude: number;
   longitude: number;
-  officialMatch: { officialName: string; officialHasCoordinates: boolean } | null;
+  officialMatch: { officialName: string; displayName?: string | null; officialHasCoordinates: boolean } | null;
 }> = {}) => ({
   osmType: "node" as const,
   osmId: 10,
@@ -82,5 +83,24 @@ describe("map prayer locations", () => {
 
     expect(locations).toHaveLength(0);
     expect(rankMapLocationsByDistance(locations, origin)).toHaveLength(0);
+  });
+
+  it("prefers approved display names for community points, OSM, and linked Ministry records", () => {
+    const locations = buildMapLocationCandidates({
+      community: [{ id: 7, name: "اسم المجتمع الخام", displayName: "اسم المجتمع المعتمد", type: "mosque", latitude: 32, longitude: 35 }],
+      official: [],
+      osm: [
+        osmFeature({ osmId: 11, displayName: "اسم OSM المعتمد" }),
+        osmFeature({
+          osmId: 12,
+          officialMatch: { officialName: "اسم الوزارة الخام", displayName: "اسم الوزارة المعتمد", officialHasCoordinates: false },
+        }),
+      ],
+      officialMapLoaded: false,
+    });
+
+    expect(locations.find((location) => location.id === "7")?.name).toBe("اسم المجتمع المعتمد");
+    expect(locations.find((location) => location.id === "osm:node/11")?.name).toBe("اسم OSM المعتمد");
+    expect(locations.find((location) => location.id === "osm:node/12")?.name).toBe("اسم الوزارة المعتمد");
   });
 });

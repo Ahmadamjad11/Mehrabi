@@ -36,6 +36,7 @@ type OpeningHoursFields = {
 export type CommunityMapPointInput = OpeningHoursFields & {
   id: number;
   name: string;
+  displayName?: string | null;
   type: string;
   latitude: number;
   longitude: number;
@@ -104,7 +105,7 @@ export const buildMapLocationCandidates = (input: {
       const isTemporarilyClosed = point.isTemporarilyClosed ?? false;
       return {
         id: String(point.id),
-        name: point.name,
+        name: point.displayName?.trim() || point.name,
         kind,
         latitude: point.latitude,
         longitude: point.longitude,
@@ -149,9 +150,9 @@ export const buildMapLocationCandidates = (input: {
     .filter((feature) => !(input.officialMapLoaded && feature.officialMatch?.officialHasCoordinates))
     .map((feature): MapLocationCandidate => {
       const ministryNameMatch = Boolean(feature.officialMatch && !feature.officialMatch.officialHasCoordinates);
-      const officialName = feature.officialMatch?.displayName?.trim() || feature.officialMatch?.officialName;
       const name = feature.displayName?.trim()
-        || officialName
+        || feature.officialMatch?.displayName?.trim()
+        || feature.officialMatch?.officialName
         || feature.osmName?.trim()
         || (feature.kind === "mosque" ? "مسجد" : "مصلى");
       const hoursMode = feature.hoursMode

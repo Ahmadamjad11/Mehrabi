@@ -1,7 +1,7 @@
 import osmMosqueMapData from "../data/osm_mosque_map_points.json";
 
 export type OfficialMosqueMapPoint = { id: number; name: string; latitude: number; longitude: number };
-export type CommunityMapPoint = { id: number; name: string; type: string; latitude: number; longitude: number };
+export type CommunityMapPoint = { id: number; name: string; displayName?: string | null; type: string; latitude: number; longitude: number };
 export const EMPTY_OFFICIAL_MAP_POINTS: OfficialMosqueMapPoint[] = [];
 export const EMPTY_COMMUNITY_MAP_POINTS: CommunityMapPoint[] = [];
 export type OsmMapFeature = {
@@ -10,6 +10,7 @@ export type OsmMapFeature = {
   osmUrl: string;
   kind: "mosque" | "musalla";
   osmName: string | null;
+  displayName?: string | null;
   alternateNames: string[];
   latitude: number;
   longitude: number;
@@ -17,6 +18,7 @@ export type OsmMapFeature = {
   officialMatch: {
     sourceKey: string;
     officialName: string;
+    displayName?: string | null;
     officialHasCoordinates: boolean;
     matchMethod: string;
   } | null;
@@ -40,15 +42,17 @@ export const createOsmHtml = (
   placeTypeFilter: "all" | "mosque" | "musalla",
   searchQuery: string,
   mapFocusLocation: { lat: number; lng: number } | null,
+  osmFeatures: OsmMapFeature[] = OSM_MAP_FEATURES,
 ) => {
-  const communityPoints = safeInlineJson(places.map(({ latitude, longitude, name, type }) => [latitude, longitude, name, type]));
+  const communityPoints = safeInlineJson(places.map(({ latitude, longitude, name, displayName, type }) => [latitude, longitude, displayName?.trim() || name, type]));
   const officialPoints = safeInlineJson(officialMosques.map(({ id, name, latitude, longitude }) => ({ id, name, latitude, longitude })));
-  const osmPoints = safeInlineJson(OSM_MAP_FEATURES.map((feature) => ({
+  const osmPoints = safeInlineJson(osmFeatures.map((feature) => ({
     osmType: feature.osmType,
     osmId: feature.osmId,
     osmUrl: feature.osmUrl,
     kind: feature.kind,
     osmName: feature.osmName,
+    displayName: feature.displayName,
     alternateNames: feature.alternateNames,
     latitude: feature.latitude,
     longitude: feature.longitude,
@@ -160,8 +164,8 @@ export const createOsmHtml = (
         const fallbackName = isMosque
           ? ("${language}" === 'ar' ? 'مسجد غير مسمّى من OSM' : 'Unnamed mosque from OSM')
           : ("${language}" === 'ar' ? 'مصلى غير مسمّى من OSM' : 'Unnamed musalla from OSM');
-        const name = officialMatch?.officialName || feature.osmName || fallbackName;
-        if (!shouldShowMarker(name, isMosque, [feature.osmName, ...(feature.alternateNames || []), officialMatch?.officialName])) return;
+        const name = feature.displayName || officialMatch?.displayName || officialMatch?.officialName || feature.osmName || fallbackName;
+        if (!shouldShowMarker(name, isMosque, [feature.displayName, feature.osmName, ...(feature.alternateNames || []), officialMatch?.displayName, officialMatch?.officialName])) return;
         const category = matchedMissingCoordinates
           ? ("${language}" === 'ar' ? 'جامع رسمي — موقعه من OSM' : 'Official mosque — location from OSM')
           : (isMosque ? ("${language}" === 'ar' ? 'جامع من OpenStreetMap' : 'Mosque from OpenStreetMap') : ("${language}" === 'ar' ? 'مصلى من OpenStreetMap' : 'Musalla from OpenStreetMap'));

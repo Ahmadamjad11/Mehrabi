@@ -185,11 +185,32 @@ export default function HomeScreen() {
     limit: 20,
     offset: placeOffset,
   };
-  const placesQuery = trpc.places.list.useQuery(serverPlaceFilters, { staleTime: 60_000, retry: 2 });
-  const officialMosquesMapQuery = trpc.officialMosques.mapPoints.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2 });
-  const publicMapPlacesQuery = trpc.places.mapPoints.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2 });
+  const placesQuery = trpc.places.list.useQuery(serverPlaceFilters, { staleTime: 60_000, retry: 2, refetchOnWindowFocus: "always" });
+  const officialMosquesMapQuery = trpc.officialMosques.mapPoints.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2, refetchOnWindowFocus: "always" });
+  const publicMapPlacesQuery = trpc.places.mapPoints.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2, refetchOnWindowFocus: "always" });
+  const osmOverridesQuery = trpc.osmOverrides.list.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2, refetchOnWindowFocus: "always" });
+  const officialNameOverridesQuery = trpc.officialMosques.displayOverrides.useQuery(undefined, { staleTime: 5 * 60_000, retry: 2, refetchOnWindowFocus: "always" });
   const publicMapPlaces = publicMapPlacesQuery.data ?? EMPTY_COMMUNITY_MAP_POINTS;
   const officialMosqueMapPoints = officialMosquesMapQuery.data?.items ?? EMPTY_OFFICIAL_MAP_POINTS;
+  const osmDisplayNameKey = JSON.stringify((osmOverridesQuery.data ?? []).map(({ osmKey, displayName }) => [osmKey, displayName]));
+  const officialDisplayNameKey = JSON.stringify((officialNameOverridesQuery.data ?? []).map(({ sourceKey, displayName }) => [sourceKey, displayName]));
+  const osmFeaturesWithNameOverrides = useMemo(() => {
+    const osmDisplayNames = new Map<string, string | null>(JSON.parse(osmDisplayNameKey));
+    const officialDisplayNames = new Map<string, string | null>(JSON.parse(officialDisplayNameKey));
+    return OSM_MAP_FEATURES.map((feature) => {
+      const osmDisplayName = osmDisplayNames.get(`${feature.osmType}/${feature.osmId}`)?.trim();
+      const officialDisplayName = feature.officialMatch
+        ? officialDisplayNames.get(feature.officialMatch.sourceKey)?.trim()
+        : undefined;
+      return {
+        ...feature,
+        displayName: osmDisplayName || feature.displayName,
+        officialMatch: feature.officialMatch
+          ? { ...feature.officialMatch, displayName: officialDisplayName || feature.officialMatch.displayName }
+          : null,
+      };
+    });
+  }, [osmDisplayNameKey, officialDisplayNameKey]);
   const mapLocationCandidates = useMemo(() => {
     const communityDetails = new Map(loadedApiPlaces.map((place) => [String(place.id), place]));
     const community = publicMapPlaces.map((point) => {
@@ -208,10 +229,10 @@ export default function HomeScreen() {
     return buildMapLocationCandidates({
       community,
       official: officialMosqueMapPoints,
-      osm: OSM_MAP_FEATURES,
+      osm: osmFeaturesWithNameOverrides,
       officialMapLoaded: officialMosquesMapQuery.isSuccess,
     });
-  }, [publicMapPlaces, officialMosqueMapPoints, officialMosquesMapQuery.isSuccess, loadedApiPlaces]);
+  }, [publicMapPlaces, officialMosqueMapPoints, officialMosquesMapQuery.isSuccess, loadedApiPlaces, osmFeaturesWithNameOverrides]);
   const sourcePlaces: Place[] = useMemo(() => {
     const ranked = userLocation
       ? rankMapLocationsByDistance(mapLocationCandidates, userLocation)
@@ -238,8 +259,8 @@ export default function HomeScreen() {
     }));
   }, [mapLocationCandidates, userLocation]);
   const mapHtml = useMemo(
-    () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation),
-    [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation],
+    () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides),
+    [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides],
   );
   const meQuery = trpc.auth.me.useQuery();
   const logoutMutation = trpc.auth.logout.useMutation();
@@ -900,7 +921,7 @@ export default function HomeScreen() {
           <Pressable style={styles.mapControl} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
           <View style={styles.mapLegend}><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.mosqueGreen }]} /><Text style={styles.legendText}>{ui.mosques}</Text></View><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.musallaBlue }]} /><Text style={styles.legendText}>{ui.musallas}</Text></View>{locationEnabled && <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendLocation]} /><Text style={styles.legendText}>{language === "ar" ? "موقعك" : "You"}</Text></View>}</View>
         </View>
-        {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError) && <View style={styles.mapCoverage}><Pressable accessibilityRole="button" onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable></View>}
+        {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError || osmOverridesQuery.isError || officialNameOverridesQuery.isError) && <View style={styles.mapCoverage}><Pressable accessibilityRole="button" onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); void osmOverridesQuery.refetch(); void officialNameOverridesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable></View>}
         <View style={styles.quickActions}>
           <Pressable style={styles.quickAction} onPress={() => void openQibla()} accessibilityRole="button">
             <View style={[styles.quickIcon, styles.quickIconGold]}><MaterialCommunityIcons name="compass-rose" size={21} color={COLORS.navy} /></View>
