@@ -6,7 +6,10 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6xk8x.manus.space"
+        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6xk8x.manus.space",
+        "EXPO_PUBLIC_ADMOB_ENABLED": "true",
+        "EXPO_PUBLIC_ADMOB_ANDROID_APP_ID": "ca-app-pub-5269683865673980~8357821294",
+        "EXPO_PUBLIC_ADMOB_APP_OPEN_UNIT_ID": "ca-app-pub-5269683865673980/1582540284"
       },
       "android": {
         "buildType": "apk"
@@ -14,7 +17,10 @@
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6xk8x.manus.space"
+        "EXPO_PUBLIC_API_BASE_URL": "https://mehrabi-dvz6xk8x.manus.space",
+        "EXPO_PUBLIC_ADMOB_ENABLED": "true",
+        "EXPO_PUBLIC_ADMOB_ANDROID_APP_ID": "ca-app-pub-5269683865673980~8357821294",
+        "EXPO_PUBLIC_ADMOB_APP_OPEN_UNIT_ID": "ca-app-pub-5269683865673980/1582540284"
       },
       "android": {
         "buildType": "app-bundle"

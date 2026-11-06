@@ -51,6 +51,19 @@ const publicRuntime = {
     "https://mehrabi-dvz6xk8x.manus.space",
 };
 
+const androidAdMobAppId = process.env.EXPO_PUBLIC_ADMOB_ANDROID_APP_ID?.trim() ?? "";
+const configureAndroidAdMob =
+  process.env.EXPO_PUBLIC_ADMOB_ENABLED === "true" &&
+  process.env.EAS_BUILD_PLATFORM !== "ios" &&
+  /^ca-app-pub-\d+~\d+$/.test(androidAdMobAppId);
+const adMobPlugin: [string, { androidAppId: string; delayAppMeasurementInit: boolean }] | null =
+  configureAndroidAdMob
+    ? [
+        "react-native-google-mobile-ads",
+        { androidAppId: androidAdMobAppId, delayAppMeasurementInit: true },
+      ]
+    : null;
+
 const config: ExpoConfig & { logoUrl: string } = {
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664032199208/lHznBaREXRXrJYDO.png",
   name: env.appName,
@@ -162,6 +175,7 @@ const config: ExpoConfig & { logoUrl: string } = {
         },
       },
     ],
+    ...(adMobPlugin ? [adMobPlugin] : []),
   ],
 
   experiments: {
