@@ -42,6 +42,11 @@ describe("map prayer locations", () => {
 
     const ranked = rankMapLocationsByDistance(locations, origin);
     expect(ranked.map((location) => location.source)).toEqual(["osm", "ministry", "community"]);
+    expect(locations.map((location) => location.favoriteKey)).toEqual([
+      "community:7",
+      "ministry:2",
+      "osm:node/10",
+    ]);
     expect(ranked[0].distanceMeters).toBeGreaterThan(0);
     expect(ranked[0].distanceMeters).toBeLessThan(ranked[1].distanceMeters);
     expect(distanceMetersBetween(origin, { latitude: origin.lat, longitude: origin.lng })).toBe(0);

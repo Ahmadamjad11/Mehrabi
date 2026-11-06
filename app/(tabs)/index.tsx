@@ -27,6 +27,7 @@ import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useSyncedFavorites } from "@/hooks/useSyncedFavorites";
 import { buildMapLocationCandidates, rankMapLocationsByDistance } from "@/lib/mapLocations";
 import { createOsmHtml, createPickerHtml, EMPTY_COMMUNITY_MAP_POINTS, EMPTY_OFFICIAL_MAP_POINTS, OSM_COPYRIGHT_URL, OSM_MAP_FEATURES } from "@/lib/osmMapHtml";
 import { bearingToKaaba, formatClock, formatCountdown, getDynamicGreeting, getPrayerProgress, getJordanCalendarDate, getPrayerSchedule, getQiblaRotation, isQiblaAligned, isReliableCompassAccuracy, isValidCompassHeading, localizePrayerName, smoothCompassHeading } from "@/lib/prayerTimes";
@@ -35,6 +36,7 @@ import { COLORS, styles } from "@/components/home/mehrabiStyles";
 
 type Place = {
   id: string;
+  favoriteKey: string;
   name: string;
   type: string;
   distance: string;
@@ -77,13 +79,15 @@ export default function HomeScreen() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [placeOffset, setPlaceOffset] = useState(0);
+  const [visiblePlaceCount, setVisiblePlaceCount] = useState(5);
   const [loadedApiPlaces, setLoadedApiPlaces] = useState<any[]>([]);
   const [usingCachedPlaces, setUsingCachedPlaces] = useState(false);
   const [activeFilter, setActiveFilter] = useState("nearest");
   const [placeTypeFilter, setPlaceTypeFilter] = useState<"all" | "mosque" | "musalla">("all");
-  const [favorites, setFavorites] = useState<string[]>([]);
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [mapInitialLocation, setMapInitialLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [mapRecenterSignal, setMapRecenterSignal] = useState(0);
   const [mapFocusLocation, setMapFocusLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [language, setLanguage] = useState<"ar" | "en">("ar");
   const [now, setNow] = useState(() => new Date());
@@ -239,6 +243,7 @@ export default function HomeScreen() {
       : mapLocationCandidates.map((location) => ({ ...location, distanceMeters: Number.MAX_SAFE_INTEGER }));
     return ranked.map((location) => ({
       id: location.id,
+      favoriteKey: location.favoriteKey,
       name: location.name,
       type: location.kind === "mosque" ? "مسجد" : "مصلى",
       distance: formatDistance(userLocation, { lat: location.latitude, lng: location.longitude }),
@@ -259,10 +264,13 @@ export default function HomeScreen() {
     }));
   }, [mapLocationCandidates, userLocation]);
   const mapHtml = useMemo(
-    () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides),
-    [publicMapPlaces, officialMosqueMapPoints, userLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides],
+    () => createOsmHtml(publicMapPlaces, officialMosqueMapPoints, mapInitialLocation, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides),
+    // The first location is injected into the loaded map; it must not itself rebuild that map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [publicMapPlaces, officialMosqueMapPoints, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides],
   );
   const meQuery = trpc.auth.me.useQuery();
+  const { favorites, toggleFavorite, syncing: favoritesSyncing, syncError: favoritesSyncError } = useSyncedFavorites(meQuery.data?.id);
   const logoutMutation = trpc.auth.logout.useMutation();
   const nearestPlaces = trpc.places.nearest.useMutation();
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
@@ -463,25 +471,19 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    void AsyncStorage.getItem("maslay:favorites").then((value) => {
-      if (value) setFavorites(JSON.parse(value));
-    });
-  }, []);
-
-  useEffect(() => {
-    void AsyncStorage.setItem("maslay:favorites", JSON.stringify(favorites));
-  }, [favorites]);
-
-  useEffect(() => {
     let watcher: Location.LocationSubscription | null = null;
     let cancelled = false;
+    const setCurrentMapLocation = (location: { lat: number; lng: number }) => {
+      setMapInitialLocation((initial) => initial ?? location);
+      setUserLocation(location);
+    };
     const refreshLocation = async () => {
       try {
         const permission = await Location.getForegroundPermissionsAsync();
         if (permission.status !== "granted") return;
         const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         if (!cancelled) {
-          setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
+          setCurrentMapLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
           setLocationEnabled(true);
           setLocationError(null);
         }
@@ -496,7 +498,7 @@ export default function HomeScreen() {
     Location.watchPositionAsync(
       { accuracy: Location.Accuracy.Balanced, distanceInterval: 100, timeInterval: 60_000 },
       (position) => {
-        setUserLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
+        setCurrentMapLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
         setLocationEnabled(true);
       },
     ).then((subscription) => { watcher = subscription; }).catch(() => undefined);
@@ -613,13 +615,28 @@ export default function HomeScreen() {
     if (activeFilter === "open") result = result.filter((place) => place.open === true);
     if (activeFilter === "ablution") result = result.filter((place) => place.ablution);
     if (activeFilter === "women") result = result.filter((place) => place.women);
-    if (activeFilter === "favorites") result = result.filter((place) => favorites.includes(place.id));
+    if (activeFilter === "favorites") result = result.filter((place) => favorites.includes(place.favoriteKey));
     if (placeTypeFilter === "mosque") result = result.filter((place) => place.type === "مسجد");
     if (placeTypeFilter === "musalla") result = result.filter((place) => place.type !== "مسجد");
     return result.sort((a, b) => a.distanceMeters - b.distanceMeters);
   }, [activeFilter, favorites, placeTypeFilter, query, sourcePlaces]);
 
-  const nearestFivePlaces = filteredPlaces.slice(0, 5);
+  const visiblePlaces = filteredPlaces.slice(0, visiblePlaceCount);
+
+  const updateSearchQuery = (value: string) => {
+    setQuery(value);
+    setVisiblePlaceCount(5);
+  };
+
+  const updatePlaceTypeFilter = (value: "all" | "mosque" | "musalla") => {
+    setPlaceTypeFilter(value);
+    setVisiblePlaceCount(5);
+  };
+
+  const updateActiveFilter = (value: string) => {
+    setActiveFilter(value);
+    setVisiblePlaceCount(5);
+  };
 
   const openMaps = (place: Place) => {
     const url = `https://www.google.com/maps/dir/?api=1&destination=${place.lat},${place.lng}`;
@@ -630,11 +647,7 @@ export default function HomeScreen() {
     await Share.share({ message: `${place.name} — ${place.distance}، ${place.drive} بالسيارة\nhttps://www.google.com/maps/search/?api=1&query=${place.lat},${place.lng}` });
   };
 
-  const toggleFavorite = (id: string) => {
-    setFavorites((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
-  };
-
-  const requestLocation = async () => {
+  const requestLocation = async (recenterMap = false) => {
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== "granted") {
@@ -642,8 +655,11 @@ export default function HomeScreen() {
         return;
       }
       const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setUserLocation({ lat: current.coords.latitude, lng: current.coords.longitude });
+      const location = { lat: current.coords.latitude, lng: current.coords.longitude };
+      setMapInitialLocation((initial) => initial ?? location);
+      setUserLocation(location);
       setMapFocusLocation(null);
+      if (recenterMap) setMapRecenterSignal((signal) => signal + 1);
       setLocationEnabled(true);
       setLocationError(null);
     } catch {
@@ -873,7 +889,7 @@ export default function HomeScreen() {
           <Text style={styles.heroHint}>{language === "ar" ? "محرابك معك في كل طريق" : "Your prayer space, wherever you go"}</Text>
         </View>
 
-        <Pressable style={[styles.locationButton, locationEnabled && styles.locationButtonActive]} onPress={requestLocation}>
+        <Pressable style={[styles.locationButton, locationEnabled && styles.locationButtonActive]} onPress={() => void requestLocation()}>
           <Ionicons name={locationEnabled ? "checkmark-circle" : "locate-outline"} size={20} color={locationEnabled ? COLORS.green : COLORS.navy} />
           <Text style={styles.locationButtonText}>{locationEnabled ? ui.located : ui.useLocation}</Text>
         </Pressable>
@@ -909,13 +925,13 @@ export default function HomeScreen() {
         <View style={styles.discoveryCard}>
           <View style={styles.searchBox}>
             <Ionicons name="search-outline" size={19} color={COLORS.muted} />
-            <TextInput value={query} onChangeText={setQuery} placeholder={ui.search} placeholderTextColor="#9DA8B3" style={styles.searchInput} textAlign="right" accessibilityLabel={ui.search} returnKeyType="search" />
-            {query.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel={language === "ar" ? "مسح البحث" : "Clear search"} onPress={() => setQuery("")}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable>}
+            <TextInput value={query} onChangeText={updateSearchQuery} placeholder={ui.search} placeholderTextColor="#9DA8B3" style={styles.searchInput} textAlign="right" accessibilityLabel={ui.search} returnKeyType="search" />
+            {query.length > 0 && <Pressable accessibilityRole="button" accessibilityLabel={language === "ar" ? "مسح البحث" : "Clear search"} onPress={() => updateSearchQuery("")}><Ionicons name="close-circle" size={18} color={COLORS.muted} /></Pressable>}
           </View>
           <View style={styles.typeSegmentRow}>
             {([{ key: "all", label: language === "ar" ? "الكل" : "All", icon: "map-outline" }, { key: "mosque", label: ui.mosques, icon: "mosque" }, { key: "musalla", label: ui.musallas, icon: "home-city-outline" }] as const).map((option) => {
               const selected = placeTypeFilter === option.key;
-              return <Pressable key={option.key} onPress={() => setPlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
+              return <Pressable key={option.key} onPress={() => updatePlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
           <Pressable style={styles.filterButton} onPress={() => setActiveTab("explore")} accessibilityRole="button">
@@ -926,9 +942,9 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.mapCard}>
-          <OsmMapFrame html={mapHtml} />
+          <OsmMapFrame html={mapHtml} userLocation={userLocation} favoriteKeys={favorites} onToggleFavorite={toggleFavorite} recenterSignal={mapRecenterSignal} />
           <View style={styles.mapHeader}><View style={styles.mapTitleBadge}><Ionicons name="navigate-outline" size={13} color={COLORS.green} /><Text style={styles.mapBadge}>{ui.mapLocation}</Text></View><Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(OSM_COPYRIGHT_URL).catch(() => undefined); }}><Text style={styles.mapProvider}>© OpenStreetMap contributors</Text></Pressable></View>
-          <Pressable style={styles.mapControl} onPress={() => { setMapFocusLocation(null); void requestLocation(); }}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
+          <Pressable style={styles.mapControl} onPress={() => { setMapFocusLocation(null); void requestLocation(true); }} accessibilityRole="button" accessibilityLabel={language === "ar" ? "إعادة تمركز الخريطة على موقعي" : "Center map on my location"}><Ionicons name="locate" size={19} color={COLORS.navy} /></Pressable>
           <View style={styles.mapLegend}><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.mosqueGreen }]} /><Text style={styles.legendText}>{ui.mosques}</Text></View><View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.musallaBlue }]} /><Text style={styles.legendText}>{ui.musallas}</Text></View>{locationEnabled && <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendLocation]} /><Text style={styles.legendText}>{language === "ar" ? "موقعك" : "You"}</Text></View>}</View>
         </View>
         {(officialMosquesMapQuery.isError || publicMapPlacesQuery.isError || osmOverridesQuery.isError || officialNameOverridesQuery.isError) && <View style={styles.mapCoverage}><Pressable accessibilityRole="button" onPress={() => { void officialMosquesMapQuery.refetch(); void publicMapPlacesQuery.refetch(); void osmOverridesQuery.refetch(); void officialNameOverridesQuery.refetch(); }}><Text style={styles.mapCoverageRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</Text></Pressable></View>}
@@ -946,6 +962,7 @@ export default function HomeScreen() {
         </View>
 
         {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
+        {meQuery.data && favoritesSyncError && <Text style={styles.offlineNotice}>{language === "ar" ? "تعذرت مزامنة المفضلات. اختياراتك محفوظة على الجهاز وسنحاول مجددًا عند عودة الاتصال." : "Favorites could not sync. Your choices remain saved on this device; we will retry when online."}</Text>}
         <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text></View>
         {!userLocation && (
           <View style={styles.emptyPlacesNotice}>
@@ -959,7 +976,7 @@ export default function HomeScreen() {
         {userLocation && filteredPlaces.length === 0 && !placesQuery.isLoading && (
           <View style={styles.emptyPlacesNotice}><Text style={styles.emptyPlacesNoticeText}>{language === "ar" ? "لا توجد مواقع تطابق البحث أو التصفية. جرّب «الكل» أو امسح التصفية والبحث." : "No map locations match this search or filter. Try All or clear the filters and search."}</Text></View>
         )}
-        {userLocation && nearestFivePlaces.map((place) => (
+        {userLocation && visiblePlaces.map((place) => (
           <View key={place.id} style={[styles.placeCard, place.type === "مسجد" ? styles.mosqueCard : styles.musallaCard]}>
             <View style={styles.placeMain}>
               <View style={[styles.placeIcon, place.type === "مسجد" ? styles.mosqueIcon : styles.musallaIcon]}><MaterialCommunityIcons name={place.type === "مسجد" ? "mosque" : "home-city-outline"} size={22} color={place.type === "مسجد" ? COLORS.mosqueGreen : COLORS.musallaBlue} /></View>
@@ -972,7 +989,7 @@ export default function HomeScreen() {
               </View>
             </View>
             <View style={styles.placeActions}>
-              {place.source === "community" && <Pressable onPress={() => toggleFavorite(place.id)} style={styles.iconAction}><Ionicons name={favorites.includes(place.id) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.id) ? COLORS.red : COLORS.muted} /></Pressable>}
+              <Pressable onPress={() => toggleFavorite(place.favoriteKey)} disabled={favoritesSyncing} accessibilityRole="button" accessibilityLabel={`${favorites.includes(place.favoriteKey) ? (language === "ar" ? "إزالة من المفضلة" : "Remove from favorites") : (language === "ar" ? "إضافة إلى المفضلة" : "Add to favorites")}: ${place.name}`} style={[styles.iconAction, favoritesSyncing && { opacity: 0.55 }]}><Ionicons name={favorites.includes(place.favoriteKey) ? "heart" : "heart-outline"} size={18} color={favorites.includes(place.favoriteKey) ? COLORS.red : COLORS.muted} /></Pressable>
               {place.source === "community" && <Pressable onPress={() => { setReviewPlaceId(Number(place.id)); if (meQuery.data) setReviewVisible(true); else openEmailAuth("login"); }} style={styles.iconAction}><Ionicons name="star-outline" size={18} color={COLORS.gold} /></Pressable>}
               <Pressable onPress={() => openNameSuggestion(place)} style={styles.suggestNameButton} accessibilityRole="button" accessibilityLabel={nameSuggestionCopy.button}><Ionicons name="create-outline" size={14} color={COLORS.green} /><Text style={styles.suggestNameText} numberOfLines={1}>{nameSuggestionCopy.button}</Text></Pressable>
               <Pressable onPress={() => sharePlace(place)} style={styles.iconAction}><Ionicons name="share-social-outline" size={18} color={COLORS.muted} /></Pressable>
@@ -980,6 +997,7 @@ export default function HomeScreen() {
             </View>
           </View>
         ))}
+        {userLocation && visiblePlaces.length < filteredPlaces.length && <Pressable style={styles.loadMoreButton} onPress={() => setVisiblePlaceCount((count) => count + 20)} accessibilityRole="button"><Text style={styles.loadMoreText}>{language === "ar" ? `عرض ${Math.min(20, filteredPlaces.length - visiblePlaces.length)} مكانًا إضافيًا` : `Show ${Math.min(20, filteredPlaces.length - visiblePlaces.length)} more places`}</Text></Pressable>}
         <View style={styles.bottomSpace} />
       </ScrollView>
       <Modal visible={activeTab !== "home"} animationType="slide" transparent onRequestClose={() => setActiveTab("home")}>
@@ -991,18 +1009,18 @@ export default function HomeScreen() {
               <View style={styles.exploreQuickGrid}>
                 {filterOptions.map((option) => {
                   const selected = activeFilter === option.key;
-                  return <Pressable key={option.key} style={styles.exploreRow} onPress={() => { setActiveFilter(option.key); setPlaceOffset(0); setActiveTab("home"); }} accessibilityRole="button" accessibilityState={{ selected }}><View style={{ flexDirection: "row-reverse", alignItems: "center", gap: 9 }}><Ionicons name={option.icon} size={18} color={selected ? COLORS.green : COLORS.muted} /><Text style={styles.exploreRowText}>{option.label}</Text></View><Ionicons name={selected ? "checkmark-circle" : "chevron-back"} size={17} color={selected ? COLORS.green : COLORS.muted} /></Pressable>;
+                  return <Pressable key={option.key} style={styles.exploreRow} onPress={() => { updateActiveFilter(option.key); setPlaceOffset(0); setActiveTab("home"); }} accessibilityRole="button" accessibilityState={{ selected }}><View style={{ flexDirection: "row-reverse", alignItems: "center", gap: 9 }}><Ionicons name={option.icon} size={18} color={selected ? COLORS.green : COLORS.muted} /><Text style={styles.exploreRowText}>{option.label}</Text></View><Ionicons name={selected ? "checkmark-circle" : "chevron-back"} size={17} color={selected ? COLORS.green : COLORS.muted} /></Pressable>;
                 })}
               </View>
               <View style={styles.exploreLocationNote}><Ionicons name="information-circle-outline" size={17} color={COLORS.gold} /><Text style={styles.exploreLocationText}>{language === "ar" ? "فلاتر الدوام والخدمات تعتمد على البيانات المتاحة، وقد لا تُظهر بعض المواقع في قائمة النتائج عند استخدامها." : "Hours and amenity filters depend on available data and may omit some places from the results list."}</Text></View>
-              <Pressable style={styles.secondaryModalButton} onPress={() => { setActiveFilter("nearest"); setPlaceTypeFilter("all"); setQuery(""); setPlaceOffset(0); setActiveTab("home"); }}><Text style={styles.secondaryModalText}>{language === "ar" ? "مسح البحث والفلاتر" : "Clear search and filters"}</Text></Pressable>
+              <Pressable style={styles.secondaryModalButton} onPress={() => { updateActiveFilter("nearest"); updatePlaceTypeFilter("all"); updateSearchQuery(""); setPlaceOffset(0); setActiveTab("home"); }}><Text style={styles.secondaryModalText}>{language === "ar" ? "مسح البحث والفلاتر" : "Clear search and filters"}</Text></Pressable>
             </>}
             {activeTab === "qibla" && <>
               <Text style={styles.modalTitle}>{language === "ar" ? "اتجاه القبلة" : "Qibla direction"}</Text>
               <View style={styles.qiblaSmartBadge}><MaterialCommunityIcons name="auto-fix" size={15} color={COLORS.green} /><Text style={styles.qiblaSmartText}>{hasQiblaLocation ? (language === "ar" ? "الحساب من موقعك الحالي" : "Calculated from your location") : (language === "ar" ? "الموقع مطلوب" : "Location required")}</Text></View>
               <QiblaCompass language={language} compassHeading={compassHeading} qiblaRotation={qiblaRotation} />
               <View style={[styles.qiblaAutoNote, language === "ar" ? { flexDirection: "row-reverse" } : { flexDirection: "row" }]}><Ionicons name={qiblaRotation !== null && qiblaAligned ? "checkmark-circle-outline" : "information-circle-outline"} size={17} color={qiblaRotation !== null && qiblaAligned ? COLORS.green : COLORS.teal} /><Text style={[styles.qiblaAutoNoteText, language === "ar" ? { textAlign: "right" } : { textAlign: "left" }]}>{qiblaInstruction}</Text></View>
-              {!hasQiblaLocation && <Pressable style={styles.primaryModalButton} onPress={requestLocation}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
+              {!hasQiblaLocation && <Pressable style={styles.primaryModalButton} onPress={() => void requestLocation()}><Text style={styles.primaryModalText}>{language === "ar" ? "تحديد موقعي" : "Use my location"}</Text></Pressable>}
             </>}
             {activeTab === "account" && <>
               <View style={styles.accountHero}><View style={styles.accountHeroIcon}><Ionicons name={meQuery.data ? "person" : "person-outline"} size={27} color={COLORS.gold} /></View><Text style={styles.modalTitle}>{meQuery.data ? (language === "ar" ? `أهلًا ${meQuery.data.name || "بك"}` : `Welcome ${meQuery.data.name || ""}`) : ui.accountTitle}</Text><Text style={styles.modalHint}>{meQuery.data ? (language === "ar" ? "حسابك جاهز لإضافة الأماكن وكتابة التقييمات." : "Your account is ready for adding places and reviews.") : (language === "ar" ? "الحساب اختياري. تحتاجه فقط لإضافة مكان أو كتابة تقييم." : ui.accountHint)}</Text></View>
@@ -1066,7 +1084,7 @@ export default function HomeScreen() {
           {addStep === 1 ? <>
             <Text style={styles.modalHint}>{ui.pickerHint}</Text>
             <View style={styles.pickerMap}><WebView source={{ html: createPickerHtml(userLocation ?? { lat: 31.9539, lng: 35.9106 }) }} onMessage={(event) => { try { const next = JSON.parse(event.nativeEvent.data); setUserLocation({ lat: next.lat, lng: next.lng }); } catch { /* ignore malformed map events */ } }} originWhitelist={["*"]} javaScriptEnabled /></View>
-            <Pressable style={styles.secondaryModalButton} onPress={requestLocation}><Text style={styles.secondaryModalText}>{ui.useCurrentLocation}</Text></Pressable>
+            <Pressable style={styles.secondaryModalButton} onPress={() => void requestLocation()}><Text style={styles.secondaryModalText}>{ui.useCurrentLocation}</Text></Pressable>
             <Pressable style={styles.primaryModalButton} disabled={!userLocation} onPress={() => setAddStep(2)}><Text style={styles.primaryModalText}>{ui.locationCorrect}</Text></Pressable>
           </> : <>
             <TextInput value={placeName} onChangeText={setPlaceName} placeholder={ui.namePlaceholder} placeholderTextColor="#8A98A5" style={styles.formInput} textAlign="right" />

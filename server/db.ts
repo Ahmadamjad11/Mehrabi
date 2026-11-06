@@ -1,9 +1,11 @@
 import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, like, lt, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash } from "node:crypto";
+import osmMosqueMapData from "../data/osm_mosque_map_points.json";
 import {
   authTokens,
   favorites,
+  favoritePlaceKeys,
   InsertPlace,
   InsertUser,
   oauthStateNonces,
@@ -13,10 +15,10 @@ import {
   places,
   reviews,
   sessionRevocations,
-  User,
   users,
 } from "../drizzle/schema";
 import type { OpeningHoursMode, WeeklyOpeningHours } from "../shared/openingHours";
+import { normalizeFavoritePlaceKey, normalizeFavoritePlaceKeys } from "../shared/favoritePlaceKeys";
 import { effectivePlaceName, isNameSnapshotCurrent } from "../shared/placeNameSuggestions";
 import { ENV } from "./_core/env";
 import { AUTH_TOKEN_MAX_ATTEMPTS, canIssueAnotherAuthToken } from "./_core/emailAuthPolicy";
@@ -376,6 +378,78 @@ export async function setFavorite(userId: number, placeId: number, enabled: bool
   } else {
     await db.delete(favorites).where(and(eq(favorites.userId, userId), eq(favorites.placeId, placeId)));
   }
+}
+
+const staticOsmFavoriteKeys = new Set(
+  (osmMosqueMapData.features as { osmType: string; osmId: number }[]).map(({ osmType, osmId }) => `osm:${osmType}/${osmId}`),
+);
+
+async function getValidFavoritePlaceKeys(values: unknown) {
+  const keys = normalizeFavoritePlaceKeys(values);
+  const db = await getDb();
+  if (!db) return [];
+
+  const communityIds = keys.filter((key) => key.startsWith("community:")).map((key) => Number(key.slice("community:".length)));
+  const ministryIds = keys.filter((key) => key.startsWith("ministry:")).map((key) => Number(key.slice("ministry:".length)));
+  const communityRows = communityIds.length
+    ? await db.select({ id: places.id }).from(places).where(and(
+      inArray(places.id, communityIds),
+      inArray(places.type, ["mosque", "musalla"]),
+      eq(places.status, "approved"),
+    ))
+    : [];
+  const ministryRows = ministryIds.length
+    ? await db.select({ id: officialMosques.id }).from(officialMosques).where(and(
+      inArray(officialMosques.id, ministryIds),
+      eq(officialMosques.displayable, true),
+    ))
+    : [];
+  const validKeys = new Set([
+    ...communityRows.map((row) => `community:${row.id}`),
+    ...ministryRows.map((row) => `ministry:${row.id}`),
+    ...keys.filter((key) => key.startsWith("osm:") && staticOsmFavoriteKeys.has(key)),
+  ]);
+  return keys.filter((key) => validKeys.has(key));
+}
+
+export async function getFavoritePlaceKeys(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select({ favoriteKey: favoritePlaceKeys.favoriteKey })
+    .from(favoritePlaceKeys)
+    .where(eq(favoritePlaceKeys.userId, userId));
+  return normalizeFavoritePlaceKeys(rows.map((row) => row.favoriteKey));
+}
+
+export async function mergeFavoritePlaceKeys(userId: number, values: unknown) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const validKeys = await getValidFavoritePlaceKeys(values);
+  if (validKeys.length) {
+    await db.insert(favoritePlaceKeys)
+      .values(validKeys.map((favoriteKey) => ({ userId, favoriteKey })))
+      .onDuplicateKeyUpdate({ set: { userId } });
+  }
+  return getFavoritePlaceKeys(userId);
+}
+
+export async function setFavoritePlaceKey(userId: number, value: unknown, enabled: boolean) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const favoriteKey = normalizeFavoritePlaceKey(value);
+  if (!favoriteKey) return null;
+
+  if (enabled) {
+    const [validKey] = await getValidFavoritePlaceKeys([favoriteKey]);
+    if (validKey !== favoriteKey) return null;
+    await db.insert(favoritePlaceKeys).values({ userId, favoriteKey }).onDuplicateKeyUpdate({ set: { userId } });
+  } else {
+    await db.delete(favoritePlaceKeys).where(and(
+      eq(favoritePlaceKeys.userId, userId),
+      eq(favoritePlaceKeys.favoriteKey, favoriteKey),
+    ));
+  }
+  return getFavoritePlaceKeys(userId);
 }
 
 export async function addReview(input: { placeId: number; userId: number; rating: number; comment?: string | null }) {

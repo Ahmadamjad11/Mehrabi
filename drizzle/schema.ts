@@ -157,6 +157,19 @@ export const favorites = mysqlTable(
   }),
 );
 
+export const favoritePlaceKeys = mysqlTable(
+  "favorite_place_keys",
+  {
+    userId: int("userId").notNull().references(() => users.id, { onDelete: "cascade" }),
+    favoriteKey: varchar("favoriteKey", { length: 64 }).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.favoriteKey] }),
+    keyIndex: index("favorite_place_keys_key_idx").on(table.favoriteKey),
+  }),
+);
+
 export const reviews = mysqlTable(
   "reviews",
   {

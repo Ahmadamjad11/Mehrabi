@@ -14,6 +14,7 @@ import {
   getOsmNameOverride,
   deletePlace,
   getFavoritePlaceIds,
+  getFavoritePlaceKeys,
   getPlaceById,
   listAllPlaces,
   listOfficialMosquePublicOverrides,
@@ -24,14 +25,17 @@ import {
   listPublicMapPoints,
   listPublicPlaces,
   listReviews,
+  mergeFavoritePlaceKeys,
   restorePlace,
   setFavorite,
+  setFavoritePlaceKey,
   updatePlaceStatus,
   updateReviewStatus,
   revokeSessionToken,
   type PlaceNameSuggestionTarget,
 } from "./db";
 import { getOpeningHoursStatus } from "../shared/openingHours";
+import { normalizeFavoritePlaceKey } from "../shared/favoritePlaceKeys";
 import { effectivePlaceName, isUnchangedPlaceName } from "../shared/placeNameSuggestions";
 
 const osmNameSuggestionFeatures = osmMosqueMapData.features;
@@ -145,6 +149,29 @@ export const appRouter = router({
       ctx.res.clearCookie(getSessionCookieName(ctx.req), { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
+  }),
+  favorites: router({
+    list: protectedProcedure.query(({ ctx }) => getFavoritePlaceKeys(ctx.user.id)),
+    merge: protectedProcedure
+      .input(z.object({ keys: z.array(z.string().max(64)).max(5000) }))
+      .mutation(async ({ ctx, input }) => {
+        const normalizedKeys = input.keys.map(normalizeFavoritePlaceKey);
+        if (normalizedKeys.includes(null)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "قائمة المفضلات تحتوي على مفتاح غير صالح." });
+        }
+        return mergeFavoritePlaceKeys(ctx.user.id, normalizedKeys.filter((key): key is string => key !== null));
+      }),
+    set: protectedProcedure
+      .input(z.object({ key: z.string().max(64), enabled: z.boolean() }))
+      .mutation(async ({ ctx, input }) => {
+        const key = normalizeFavoritePlaceKey(input.key);
+        if (!key || key !== input.key) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "مفتاح المكان غير صالح." });
+        }
+        const keys = await setFavoritePlaceKey(ctx.user.id, key, input.enabled);
+        if (!keys) throw new TRPCError({ code: "NOT_FOUND", message: "المكان غير موجود أو غير متاح للعامة." });
+        return keys;
+      }),
   }),
   places: router({
     list: publicProcedure

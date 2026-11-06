@@ -99,6 +99,13 @@
       "when": 1793829338732,
       "tag": "0013_add_place_name_suggestions",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1793990248800,
+      "tag": "0014_add_favorite_place_keys",
+      "breakpoints": true
     }
   ]
 }

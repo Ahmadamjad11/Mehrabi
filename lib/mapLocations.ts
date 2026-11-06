@@ -5,6 +5,7 @@ export type MapLocationSource = "community" | "ministry" | "osm";
 
 export type MapLocationCandidate = {
   id: string;
+  favoriteKey: string;
   name: string;
   kind: MapLocationKind;
   latitude: number;
@@ -105,6 +106,7 @@ export const buildMapLocationCandidates = (input: {
       const isTemporarilyClosed = point.isTemporarilyClosed ?? false;
       return {
         id: String(point.id),
+        favoriteKey: `community:${point.id}`,
         name: point.displayName?.trim() || point.name,
         kind,
         latitude: point.latitude,
@@ -131,6 +133,7 @@ export const buildMapLocationCandidates = (input: {
       const isTemporarilyClosed = point.isTemporarilyClosed ?? false;
       return {
         id: `ministry:${point.id}`,
+        favoriteKey: `ministry:${point.id}`,
         name: point.name,
         kind: "mosque",
         latitude: point.latitude,
@@ -164,6 +167,7 @@ export const buildMapLocationCandidates = (input: {
         ?? false;
       return {
         id: `osm:${feature.osmType}/${feature.osmId}`,
+        favoriteKey: `osm:${feature.osmType}/${feature.osmId}`,
         name,
         kind: feature.kind,
         latitude: feature.latitude,

@@ -45,6 +45,19 @@ describe("approved names in the map HTML", () => {
     expect(html).toContain("اسم OSM المعتمد");
     expect(html).toContain("اسم الوزارة المعتمد");
     expect(html).toContain('"displayName":"اسم OSM المعتمد"');
+    expect(html).toContain("data-mehrabi-favorite-key");
+    expect(html).toContain("'community:' + placeId");
+    expect(html).toContain("'ministry:' + id");
+    expect(html).toContain("'osm:' + feature.osmType + '/' + feature.osmId");
     expect(html).not.toContain("اسم المجتمع الخام");
+  });
+
+  it("moves the GPS marker without recentering or zooming on routine location updates", () => {
+    const html = createOsmHtml([], [], null, "ar", true, "all", "", null);
+
+    expect(html).toContain("userLocationMarker.setLatLng(position)");
+    expect(html).toContain("if (centerOnFirstFix) map.setView(position");
+    expect(html).toContain("window.centerMehrabiMapOnUserLocation");
+    expect(html).toContain("event.data.type === 'mehrabi-user-location'");
   });
 });

@@ -44,7 +44,7 @@ export const createOsmHtml = (
   mapFocusLocation: { lat: number; lng: number } | null,
   osmFeatures: OsmMapFeature[] = OSM_MAP_FEATURES,
 ) => {
-  const communityPoints = safeInlineJson(places.map(({ latitude, longitude, name, displayName, type }) => [latitude, longitude, displayName?.trim() || name, type]));
+  const communityPoints = safeInlineJson(places.map(({ id, latitude, longitude, name, displayName, type }) => [latitude, longitude, displayName?.trim() || name, type, id]));
   const officialPoints = safeInlineJson(officialMosques.map(({ id, name, latitude, longitude }) => ({ id, name, latitude, longitude })));
   const osmPoints = safeInlineJson(osmFeatures.map((feature) => ({
     osmType: feature.osmType,
@@ -84,6 +84,21 @@ export const createOsmHtml = (
       const mapTypeFilter = ${safeInlineJson(placeTypeFilter)};
       const mapSearchQuery = ${safeInlineJson(searchQuery.trim().toLocaleLowerCase())};
       const markerRenderer = L.canvas({ padding: 0.5 });
+      const favoriteKeys = new Set();
+
+      window.setMehrabiFavoriteKeys = (keys) => {
+        favoriteKeys.clear();
+        (Array.isArray(keys) ? keys : []).forEach((key) => favoriteKeys.add(String(key)));
+        document.querySelectorAll('[data-mehrabi-favorite-key]').forEach((button) => {
+          const key = button.getAttribute('data-mehrabi-favorite-key');
+          const selected = favoriteKeys.has(key);
+          button.textContent = selected ? '♥' : '♡';
+          button.setAttribute('aria-pressed', String(selected));
+          button.setAttribute('aria-label', selected
+            ? ("${language}" === 'ar' ? 'إزالة من المفضلة' : 'Remove from favorites')
+            : ("${language}" === 'ar' ? 'إضافة إلى المفضلة' : 'Add to favorites'));
+        });
+      };
 
       function shouldShowMarker(name, isMosque, alternateNames = []) {
         if (mapTypeFilter === 'mosque' && !isMosque) return false;
@@ -104,7 +119,7 @@ export const createOsmHtml = (
           && Array.from(parts[1]).every((digit) => digit >= '0' && digit <= '9');
       }
 
-      function popupContent(name, category, source, osmUrl) {
+      function popupContent(name, category, source, osmUrl, favoriteKey) {
         const content = document.createElement('div');
         content.dir = "${language}" === 'ar' ? 'rtl' : 'ltr';
         const title = document.createElement('strong');
@@ -130,30 +145,86 @@ export const createOsmHtml = (
           });
           content.appendChild(link);
         }
+        if (favoriteKey) {
+          const favoriteButton = document.createElement('button');
+          favoriteButton.type = 'button';
+          favoriteButton.setAttribute('data-mehrabi-favorite-key', favoriteKey);
+          favoriteButton.setAttribute('aria-pressed', String(favoriteKeys.has(favoriteKey)));
+          favoriteButton.setAttribute('aria-label', favoriteKeys.has(favoriteKey)
+            ? ("${language}" === 'ar' ? 'إزالة من المفضلة' : 'Remove from favorites')
+            : ("${language}" === 'ar' ? 'إضافة إلى المفضلة' : 'Add to favorites'));
+          favoriteButton.textContent = favoriteKeys.has(favoriteKey) ? '♥' : '♡';
+          favoriteButton.style.cssText = 'margin-top:8px;padding:5px 10px;border:1px solid #e7edf2;border-radius:8px;background:#f7f9fa;color:#d46c66;font-size:18px;line-height:1;';
+          favoriteButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const message = { type: 'toggle-favorite', key: favoriteKey };
+            if (window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === 'function') {
+              window.ReactNativeWebView.postMessage(JSON.stringify(message));
+            } else if (window.parent !== window) {
+              window.parent.postMessage(message, '*');
+            }
+          });
+          content.appendChild(favoriteButton);
+        }
         return content;
       }
 
-      function addMarker(lat, lng, color, name, category, source, osmUrl, radius = 5) {
+      function addMarker(lat, lng, color, name, category, source, osmUrl, favoriteKey, radius = 5) {
         const latitude = Number(lat);
         const longitude = Number(lng);
         if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return;
         const position = [latitude, longitude];
         L.circleMarker(position, { renderer: markerRenderer, radius, color: '#fff', weight: 1.25, fillColor: color, fillOpacity: 0.92 })
           .addTo(map)
-          .bindPopup(popupContent(name, category, source, osmUrl));
+          .bindPopup(popupContent(name, category, source, osmUrl, favoriteKey));
       }
 
-      communityPoints.forEach(([lat, lng, name, type]) => {
+      let userLocationMarker = null;
+      window.updateMehrabiUserLocation = (location, centerOnFirstFix = false) => {
+        const latitude = Number(location?.lat);
+        const longitude = Number(location?.lng);
+        if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) return false;
+        const position = [latitude, longitude];
+        if (userLocationMarker) {
+          userLocationMarker.setLatLng(position);
+        } else {
+          userLocationMarker = L.circleMarker(position, { renderer: markerRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#4A94F5', fillOpacity: 0.92 })
+            .addTo(map)
+            .bindPopup("${language}" === 'ar' ? 'موقعك الحالي' : 'Your location');
+        }
+        if (centerOnFirstFix) map.setView(position, Math.max(map.getZoom(), 13), { animate: false });
+        return true;
+      };
+
+      window.centerMehrabiMapOnUserLocation = () => {
+        if (!userLocationMarker) return false;
+        map.setView(userLocationMarker.getLatLng(), Math.max(map.getZoom(), 13), { animate: false });
+        return true;
+      };
+
+      window.addEventListener('message', (event) => {
+        if (event.source !== window.parent || !event.data) return;
+        if (event.data.type === 'mehrabi-user-location') {
+          window.updateMehrabiUserLocation(event.data.location, event.data.centerOnFirstFix === true);
+          if (event.data.recenter === true) window.centerMehrabiMapOnUserLocation();
+        } else if (event.data.type === 'mehrabi-favorite-keys') {
+          window.setMehrabiFavoriteKeys(event.data.keys);
+        }
+      });
+
+      communityPoints.forEach(([lat, lng, name, type, placeId]) => {
         const isMosque = type === 'مسجد' || type === 'mosque';
         if (!shouldShowMarker(name, isMosque)) return;
         const category = isMosque ? ("${language}" === 'ar' ? 'مسجد' : 'Mosque') : ("${language}" === 'ar' ? 'مصلى' : 'Musalla');
         const source = "${language}" === 'ar' ? 'مكان معتمد في التطبيق' : 'Approved place in the app';
-        addMarker(lat, lng, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, null, 5.5);
+        addMarker(lat, lng, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, null, 'community:' + placeId, 5.5);
       });
 
-      officialMosques.forEach(({ name, latitude, longitude }) => {
+      officialMosques.forEach(({ id, name, latitude, longitude }) => {
         if (!shouldShowMarker(name, true)) return;
-        addMarker(latitude, longitude, '#2B9A76', name, "${language}" === 'ar' ? 'جامع رسمي' : 'Official mosque', "${language}" === 'ar' ? 'إحداثيات سجل وزارة الأوقاف' : 'Ministry registry coordinates', null, 6);
+        const source = "${language}" === 'ar' ? 'إحداثيات سجل وزارة الأوقاف' : 'Ministry registry coordinates';
+        addMarker(latitude, longitude, '#2B9A76', name, "${language}" === 'ar' ? 'جامع رسمي' : 'Official mosque', source, null, 'ministry:' + id, 6);
       });
 
       osmFeatures.forEach((feature) => {
@@ -172,19 +243,10 @@ export const createOsmHtml = (
         const source = matchedMissingCoordinates
           ? ("${language}" === 'ar' ? 'اسم وزارة الأوقاف؛ الإحداثيات من OSM' : 'Ministry name; coordinates from OSM')
           : ("${language}" === 'ar' ? 'معلم OSM غير مربوط بثقة بسجل الوزارة' : 'OSM feature not confidently linked to a Ministry record');
-        addMarker(feature.latitude, feature.longitude, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, feature.osmUrl, 5);
+        addMarker(feature.latitude, feature.longitude, isMosque ? '#2B9A76' : '#7C8EDB', name, category, source, feature.osmUrl, 'osm:' + feature.osmType + '/' + feature.osmId, 5);
       });
 
-      if (userLocation) {
-          const latitude = Number(userLocation.lat);
-          const longitude = Number(userLocation.lng);
-          if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-            const position = [latitude, longitude];
-            L.circleMarker(position, { renderer: markerRenderer, radius: 8, color: '#fff', weight: 2, fillColor: '#4A94F5', fillOpacity: 0.92 })
-            .addTo(map)
-            .bindPopup("${language}" === 'ar' ? 'موقعك الحالي' : 'Your location');
-        }
-      }
+      if (userLocation) window.updateMehrabiUserLocation(userLocation, false);
 
       setTimeout(() => map.invalidateSize(), 80);
     </script>
