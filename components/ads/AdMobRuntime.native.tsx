@@ -12,6 +12,7 @@ import { AdsConsentContext } from "./AdsConsentContext";
 
 const APP_OPEN_LAUNCH_COUNT_KEY = "mehrabi.admob.app-open-launch-count.v1";
 const FIRST_ELIGIBLE_LAUNCH = 3;
+const COLD_START_AD_WINDOW_MS = 8000;
 const appOpenUnitId = process.env.EXPO_PUBLIC_ADMOB_APP_OPEN_UNIT_ID ?? "";
 
 type Props = PropsWithChildren<{ allowColdStartAd: boolean }>;
@@ -20,6 +21,7 @@ export default function AdMobRuntime({ children, allowColdStartAd }: Props) {
   const [canRequestAds, setCanRequestAds] = useState(false);
   const [privacyOptionsRequired, setPrivacyOptionsRequired] = useState(false);
   const [eligibleAfterSeveralOpens, setEligibleAfterSeveralOpens] = useState<boolean | null>(null);
+  const [coldStartAdWindowOpen, setColdStartAdWindowOpen] = useState(true);
   const initializationPromise = useRef<Promise<unknown> | null>(null);
   const coldStartResolved = useRef(false);
   const coldStartAdOffered = useRef(false);
@@ -29,6 +31,15 @@ export default function AdMobRuntime({ children, allowColdStartAd }: Props) {
     coldStartResolved.current = true;
     void SplashScreen.hideAsync().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setColdStartAdWindowOpen(false);
+      finishColdStart();
+    }, COLD_START_AD_WINDOW_MS);
+
+    return () => clearTimeout(timer);
+  }, [finishColdStart]);
 
   const initializeSdkOnce = useCallback(() => {
     if (!initializationPromise.current) {
@@ -133,14 +144,18 @@ export default function AdMobRuntime({ children, allowColdStartAd }: Props) {
 
   const { status: appOpenStatus, showAdIfAvailable, isShowing } = useAppOpenAdManager({
     adUnitId:
-      canRequestAds && eligibleAfterSeveralOpens === true && appOpenUnitId.length > 0
+      coldStartAdWindowOpen &&
+      canRequestAds &&
+      eligibleAfterSeveralOpens === true &&
+      appOpenUnitId.length > 0
         ? appOpenUnitId
         : null,
-    autoLoad: canRequestAds && eligibleAfterSeveralOpens === true,
+    autoLoad:
+      coldStartAdWindowOpen && canRequestAds && eligibleAfterSeveralOpens === true,
   });
 
   useEffect(() => {
-    if (!allowColdStartAd) {
+    if (!allowColdStartAd || !coldStartAdWindowOpen) {
       finishColdStart();
       return;
     }
@@ -179,6 +194,7 @@ export default function AdMobRuntime({ children, allowColdStartAd }: Props) {
   }, [
     appOpenStatus,
     allowColdStartAd,
+    coldStartAdWindowOpen,
     canRequestAds,
     eligibleAfterSeveralOpens,
     finishColdStart,
