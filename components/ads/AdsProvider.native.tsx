@@ -30,7 +30,6 @@ export default function AdsProvider({ children }: PropsWithChildren) {
     let mounted = true;
     const fallbackTimer = setTimeout(() => {
       if (!mounted) return;
-      setAllowColdStartAd(false);
       void SplashScreen.hideAsync().catch(() => undefined);
     }, COLD_START_SPLASH_TIMEOUT_MS);
 
