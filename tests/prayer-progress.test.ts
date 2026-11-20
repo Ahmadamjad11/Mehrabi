@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPrayerProgress } from "../lib/prayerTimes";
+import { getDynamicGreeting, getPrayerProgress, localizePrayerName } from "../lib/prayerTimes";
 
 describe("prayer progress", () => {
   const previousPrayer = new Date("2026-11-05T17:00:00.000Z");
@@ -25,5 +25,10 @@ describe("prayer progress", () => {
   it("returns zero for invalid or non-positive intervals", () => {
     expect(getPrayerProgress(nextPrayer, previousPrayer, new Date("2026-11-05T19:00:00.000Z"))).toBe(0);
     expect(getPrayerProgress(new Date(Number.NaN), nextPrayer, previousPrayer)).toBe(0);
+  });
+
+  it("keeps complete Arabic greeting and prayer labels", () => {
+    expect(getDynamicGreeting(new Date("2026-11-20T11:49:00.000Z"), "ar")).toBe("مساء الخير");
+    expect(localizePrayerName("العشاء", "ar")).toBe("العشاء");
   });
 });

@@ -82,7 +82,6 @@ export default function HomeScreen() {
   const [placeOffset, setPlaceOffset] = useState(0);
   const [visiblePlaceCount, setVisiblePlaceCount] = useState(5);
   const [loadedApiPlaces, setLoadedApiPlaces] = useState<any[]>([]);
-  const [usingCachedPlaces, setUsingCachedPlaces] = useState(false);
   const [activeFilter, setActiveFilter] = useState("nearest");
   const [placeTypeFilter, setPlaceTypeFilter] = useState<"all" | "mosque" | "musalla">("all");
   const [locationEnabled, setLocationEnabled] = useState(false);
@@ -271,7 +270,7 @@ export default function HomeScreen() {
     [publicMapPlaces, officialMosqueMapPoints, language, officialMosquesMapQuery.isSuccess, placeTypeFilter, query, mapFocusLocation, osmFeaturesWithNameOverrides],
   );
   const meQuery = trpc.auth.me.useQuery();
-  const { favorites, toggleFavorite, syncing: favoritesSyncing, syncError: favoritesSyncError } = useSyncedFavorites(meQuery.data?.id);
+  const { favorites, toggleFavorite, syncing: favoritesSyncing } = useSyncedFavorites(meQuery.data?.id);
   const logoutMutation = trpc.auth.logout.useMutation();
   const nearestPlaces = trpc.places.nearest.useMutation();
   const submitPlace = trpc.places.submit.useMutation({ onSuccess: () => { setSubmitError(null); setAddFormVisible(false); setAddStep(1); setPlaceName(""); setPlaceAddress(""); placesQuery.refetch(); }, onError: (error) => setSubmitError(language === "ar" ? `تعذر إرسال المكان: ${error.message}` : `Could not submit place: ${error.message}`) });
@@ -440,7 +439,6 @@ export default function HomeScreen() {
       return [...current, ...placesQuery.data.filter((place) => !known.has(place.id))];
     });
     void AsyncStorage.setItem(PLACES_CACHE_KEY, JSON.stringify(placesQuery.data));
-    setUsingCachedPlaces(false);
   }, [activeFilter, placeOffset, placesQuery.data, userLocation]);
 
   useEffect(() => {
@@ -450,7 +448,6 @@ export default function HomeScreen() {
         const cached = JSON.parse(value) as any[];
         if (cached.length > 0) {
           setLoadedApiPlaces(cached);
-          setUsingCachedPlaces(true);
         }
       } catch { /* ignore an invalid cache and continue with the network */ }
     });
@@ -885,7 +882,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.greetingBlock}>
-            <View style={styles.greetingPill}><View style={styles.greetingDot} /><Text style={styles.eyebrow}>{getDynamicGreeting(now, language)}</Text></View>
+            <View style={styles.greetingPill}><View style={styles.greetingDot} /><Text style={[styles.eyebrow, language === "ar" && styles.arabicCompleteText]}>{getDynamicGreeting(now, language)}</Text></View>
           <Text style={styles.title}>{ui.title}</Text>
           <Text style={styles.heroHint}>{language === "ar" ? "محرابك معك في كل طريق" : "Your prayer space, wherever you go"}</Text>
         </View>
@@ -899,9 +896,9 @@ export default function HomeScreen() {
         <View style={styles.prayerCard}>
           <View style={styles.prayerOrb} />
           <View style={styles.prayerTop}>
-            <View>
+            <View style={styles.prayerDetails}>
               <Text style={styles.prayerLabel}>{ui.nextPrayer}</Text>
-              <Text style={styles.prayerName}>{ui.prayerPrefix} {localizePrayerName(prayerState.name, language)}</Text>
+              <Text style={[styles.prayerName, language === "ar" && styles.arabicCompleteText]}>{ui.prayerPrefix} {localizePrayerName(prayerState.name, language)}</Text>
               <Text style={styles.prayerTime}>{ui.today}، {formatClock(prayerState.time, language)}</Text>
             </View>
             <View style={styles.countdownWrap}>
@@ -962,8 +959,6 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
-        {usingCachedPlaces && <Text style={styles.offlineNotice}>{language === "ar" ? "تُعرض آخر بيانات محفوظة — سنحدّثها عند عودة الاتصال" : "Showing saved data — it will refresh when you are online"}</Text>}
-        {meQuery.data && favoritesSyncError && <Text style={styles.offlineNotice}>{language === "ar" ? "تعذرت مزامنة المفضلات. اختياراتك محفوظة على الجهاز وسنحاول مجددًا عند عودة الاتصال." : "Favorites could not sync. Your choices remain saved on this device; we will retry when online."}</Text>}
         <View style={styles.listHeader}><Text style={styles.nearbyCount}>{language === "ar" ? "أقرب المواقع إلى موقعك" : "Closest places to you"}</Text></View>
         {!userLocation && (
           <View style={styles.emptyPlacesNotice}>
