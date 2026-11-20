@@ -882,8 +882,25 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.greetingBlock}>
-            <View style={[styles.greetingPill, language === "ar" && styles.greetingPillArabic]}><View style={styles.greetingDot} /><Text style={[styles.eyebrow, language === "ar" && styles.arabicCompleteText]}>{getDynamicGreeting(now, language)}</Text></View>
-          <Text style={styles.title}>{ui.title}</Text>
+          <View style={[styles.greetingPill, language === "ar" && styles.greetingPillArabic]}>
+            <View style={styles.greetingDot} />
+            <Text
+              style={[styles.eyebrow, language === "ar" && styles.arabicCompleteText]}
+              numberOfLines={language === "ar" ? 1 : undefined}
+              adjustsFontSizeToFit={language === "ar"}
+              minimumFontScale={0.7}
+            >
+              {getDynamicGreeting(now, language)}
+            </Text>
+          </View>
+          <Text
+            style={[styles.title, language === "ar" && styles.titleArabic]}
+            numberOfLines={language === "ar" ? 1 : undefined}
+            adjustsFontSizeToFit={language === "ar"}
+            minimumFontScale={0.75}
+          >
+            {ui.title}
+          </Text>
           <Text style={styles.heroHint}>{language === "ar" ? "محرابك معك في كل طريق" : "Your prayer space, wherever you go"}</Text>
         </View>
 
