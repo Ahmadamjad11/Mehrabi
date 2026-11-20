@@ -35,6 +35,7 @@ export const styles = StyleSheet.create({
   profileLetter: { color: COLORS.navy, fontWeight: "800", fontSize: 15 },
   greetingBlock: { alignItems: "flex-end", marginBottom: 15 },
   greetingPill: { flexDirection: "row-reverse", alignItems: "center", gap: 6, backgroundColor: COLORS.goldSoft, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, marginBottom: 9 },
+  greetingPillArabic: { minWidth: 96, flexShrink: 0 },
   greetingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.gold },
   eyebrow: { color: COLORS.navy, fontSize: 11, fontWeight: "800" },
   arabicCompleteText: { writingDirection: "rtl", textAlign: "right", flexShrink: 0 },
