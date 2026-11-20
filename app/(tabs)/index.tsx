@@ -915,7 +915,14 @@ export default function HomeScreen() {
           <View style={styles.prayerTop}>
             <View style={styles.prayerDetails}>
               <Text style={styles.prayerLabel}>{ui.nextPrayer}</Text>
-              <Text style={[styles.prayerName, language === "ar" && styles.arabicCompleteText]}>{ui.prayerPrefix} {localizePrayerName(prayerState.name, language)}</Text>
+              <Text
+                style={[styles.prayerName, language === "ar" && styles.prayerNameArabic]}
+                numberOfLines={language === "ar" ? 1 : undefined}
+                adjustsFontSizeToFit={language === "ar"}
+                minimumFontScale={0.7}
+              >
+                {ui.prayerPrefix} {localizePrayerName(prayerState.name, language)}
+              </Text>
               <Text style={styles.prayerTime}>{ui.today}، {formatClock(prayerState.time, language)}</Text>
             </View>
             <View style={styles.countdownWrap}>
