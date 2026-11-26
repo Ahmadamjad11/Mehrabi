@@ -8,6 +8,12 @@ on:
       - .github/prepare-firebase-deps
       - app.config.ts
       - google-services.json
+      - firebase.json
+      - app/_layout.tsx
+      - app/(tabs)/index.tsx
+      - app/privacy.tsx
+      - lib/analytics.ts
+      - components/analytics/AnalyticsConsentSettings.tsx
 
 permissions:
   contents: write
@@ -50,6 +56,9 @@ jobs:
 
       - name: Validate Expo native config
         run: pnpm exec expo config --type prebuild > /tmp/expo-config.json
+
+      - name: Type-check application
+        run: pnpm exec tsc --noEmit
 
       - name: Commit dependency changes
         run: |
