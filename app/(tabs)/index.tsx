@@ -933,7 +933,7 @@ export default function HomeScreen() {
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${prayerState.progress * 100}%` }]} /></View>
           <View style={styles.prayerFooter}>
             <Text style={styles.nextHint}>{ui.prayerHint}</Text>
-            <Pressable onPress={() => setPrayerTimesVisible(true) style={styles.prayerTimesButton}><Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text></Pressable>
+            <Pressable onPress={() => setPrayerTimesVisible(true)} style={styles.prayerTimesButton}><Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text></Pressable>
           </View>
         </View>
 
