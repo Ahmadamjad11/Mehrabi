@@ -1,0 +1,52 @@
+name: Prepare Firebase Analytics dependencies
+
+on:
+  push:
+    branches:
+      - chore/firebase-analytics-deps
+    paths:
+      - .github/prepare-firebase-deps
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: chore/firebase-analytics-deps
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - name: Install Expo-compatible Firebase packages
+        run: pnpm exec expo install expo-dev-client @react-native-firebase/app @react-native-firebase/analytics
+
+      - name: Verify Expo dependency compatibility
+        run: pnpm exec expo install --check
+
+      - name: Update lockfile
+        run: pnpm install --lockfile-only
+
+      - name: Commit dependency changes
+        run: |
+          if git diff --quiet -- package.json pnpm-lock.yaml; then
+            echo "No dependency changes were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json pnpm-lock.yaml
+          git commit -m "chore: add Firebase Analytics dependencies"
+          git push origin chore/firebase-analytics-deps
