@@ -91,6 +91,7 @@ const config: ExpoConfig & { logoUrl: string } = {
   },
 
   android: {
+    googleServicesFile: "./google-services.json",
     versionCode: 10015,
     adaptiveIcon: {
       backgroundColor: "#102D4A",
@@ -123,6 +124,7 @@ const config: ExpoConfig & { logoUrl: string } = {
   },
 
   plugins: [
+    "@react-native-firebase/app",
     "expo-asset",
     "expo-router",
     [
