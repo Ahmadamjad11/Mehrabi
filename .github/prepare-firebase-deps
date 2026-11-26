@@ -1,1 +1,1 @@
-Trigger Firebase dependency preparation after installing project dependencies first.
+Retry Firebase dependency preparation after allowing pnpm root dependency installation.
