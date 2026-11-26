@@ -23,7 +23,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import OsmMapFrame from "@/components/OsmMapFrame";
 import AdPrivacyOptions from "@/components/ads/AdPrivacyOptions";
-import AnalyticsConsentSettings from "@/components/analytics/AnalyticsConsentSettings";
 import QiblaCompass from "@/components/home/QiblaCompass";
 import { trpc } from "@/lib/trpc";
 import { getApiBaseUrl, startOAuthLogin } from "@/constants/oauth";
@@ -35,7 +34,6 @@ import { createOsmHtml, createPickerHtml, EMPTY_COMMUNITY_MAP_POINTS, EMPTY_OFFI
 import { bearingToKaaba, formatClock, formatCountdown, getDynamicGreeting, getPrayerProgress, getJordanCalendarDate, getPrayerSchedule, getQiblaRotation, isQiblaAligned, isReliableCompassAccuracy, isValidCompassHeading, localizePrayerName, smoothCompassHeading } from "@/lib/prayerTimes";
 import { clearPrayerReminderSchedule, configurePrayerNotifications, schedulePrayerReminders } from "@/lib/prayerReminderNotifications";
 import { COLORS, styles } from "@/components/home/mehrabiStyles";
-import { trackAnalyticsEvent } from "@/lib/analytics";
 
 type Place = {
   id: string;
@@ -673,7 +671,6 @@ export default function HomeScreen() {
     setHeadingReady(false);
     setHeadingProblem(null);
     setActiveTab("qibla");
-    trackAnalyticsEvent("qibla_open");
     if (!userLocation) await requestLocation();
   };
 
@@ -878,7 +875,7 @@ export default function HomeScreen() {
             <Pressable onPress={() => setLanguage(language === "ar" ? "en" : "ar")} style={styles.languageButton}>
               <Text style={styles.languageText}>{language === "ar" ? "EN" : "ع"}</Text>
             </Pressable>
-            <Pressable onPress={() => { setActiveTab("account"); trackAnalyticsEvent("account_open"); }} accessibilityRole="button" accessibilityLabel={ui.account} style={styles.profileButton}>
+            <Pressable onPress={() => setActiveTab("account")} accessibilityRole="button" accessibilityLabel={ui.account} style={styles.profileButton}>
               <Text style={styles.profileLetter}>م</Text>
             </Pressable>
           </View>
@@ -936,7 +933,7 @@ export default function HomeScreen() {
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${prayerState.progress * 100}%` }]} /></View>
           <View style={styles.prayerFooter}>
             <Text style={styles.nextHint}>{ui.prayerHint}</Text>
-            <Pressable onPress={() => { setPrayerTimesVisible(true); trackAnalyticsEvent("prayer_times_open"); }} style={styles.prayerTimesButton}><Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text></Pressable>
+            <Pressable onPress={() => setPrayerTimesVisible(true) style={styles.prayerTimesButton}><Text style={styles.prayerLink}>{ui.prayerTimes} <Ionicons name="arrow-back" size={12} color={COLORS.gold} /></Text></Pressable>
           </View>
         </View>
 
@@ -959,7 +956,7 @@ export default function HomeScreen() {
               return <Pressable key={option.key} onPress={() => updatePlaceTypeFilter(option.key)} style={[styles.typeSegment, selected && styles.typeSegmentActive, option.key === "mosque" && selected && styles.typeSegmentMosque, option.key === "musalla" && selected && styles.typeSegmentMusalla]}><MaterialCommunityIcons name={option.icon as any} size={16} color={selected ? COLORS.white : option.key === "mosque" ? COLORS.mosqueGreen : option.key === "musalla" ? COLORS.musallaBlue : COLORS.muted} /><Text style={[styles.typeSegmentText, selected && styles.typeSegmentTextActive]}>{option.label}</Text></Pressable>;
             })}
           </View>
-          <Pressable style={styles.filterButton} onPress={() => { setActiveTab("explore"); trackAnalyticsEvent("explore_open"); }} accessibilityRole="button">
+          <Pressable style={styles.filterButton} onPress={() => setActiveTab("explore")} accessibilityRole="button">
             <Ionicons name="options-outline" size={17} color={COLORS.navy} />
             <Text style={styles.filterButtonText}>{language === "ar" ? "تصفية وترتيب" : "Filter & sort"}</Text>
             <Text style={styles.filterButtonValue}>{activeFilterLabel}</Text>
@@ -1056,7 +1053,6 @@ export default function HomeScreen() {
                 {remindersEnabled && Platform.OS === "android" && Number(Platform.Version) >= 31 && <View style={styles.exactAlarmHelp}><Text style={styles.reminderHint}>{language === "ar" ? "قد يؤخر Android التذكير إذا لم تسمح لمحرابي بالتنبيهات الدقيقة. فعّل الإذن من إعدادات النظام." : "Android may delay reminders unless Mehrabi is allowed to schedule exact alarms. Enable it in system settings."}</Text><Pressable onPress={() => void openExactAlarmSettings()} accessibilityRole="button"><Text style={styles.authLinkText}>{language === "ar" ? "ضبط التنبيهات الدقيقة" : "Set exact alarms"}</Text></Pressable></View>}
               </View>
               <AdPrivacyOptions language={language} />
-              <AnalyticsConsentSettings language={language} />
               <View style={styles.legalLinks}><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/privacy" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "سياسة الخصوصية" : "Privacy policy"}</Text></Pressable><Text style={styles.legalSeparator}>•</Text><Pressable onPress={() => { setActiveTab("home"); router.push({ pathname: "/terms" } as never); }}><Text style={styles.legalLinkText}>{language === "ar" ? "شروط الاستخدام" : "Terms of use"}</Text></Pressable></View>
               {meQuery.data && <Pressable style={styles.secondaryModalButton} onPress={signOut}><Text style={styles.secondaryModalText}>{ui.logout}</Text></Pressable>}
             </>}
