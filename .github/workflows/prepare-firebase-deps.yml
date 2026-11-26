@@ -37,7 +37,7 @@ jobs:
         run: pnpm config set ignore-workspace-root-check true
 
       - name: Install Expo-compatible Firebase packages
-        run: pnpm exec expo install expo-dev-client @react-native-firebase/app @react-native-firebase/analytics
+        run: pnpm add expo-dev-client@~57.0.22 @react-native-firebase/app@^27.2.0 @react-native-firebase/analytics@^27.2.0
 
       - name: Verify Expo dependency compatibility
         run: pnpm exec expo install --check
