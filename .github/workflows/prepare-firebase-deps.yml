@@ -6,6 +6,8 @@ on:
       - chore/firebase-analytics-deps
     paths:
       - .github/prepare-firebase-deps
+      - app.config.ts
+      - google-services.json
 
 permissions:
   contents: write
@@ -45,6 +47,9 @@ jobs:
 
       - name: Update lockfile
         run: pnpm install --lockfile-only
+
+      - name: Validate Expo native config
+        run: pnpm exec expo config --type prebuild > /tmp/expo-config.json
 
       - name: Commit dependency changes
         run: |
