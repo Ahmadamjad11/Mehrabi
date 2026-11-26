@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1041675977587",
+    "project_id": "mehrabi-4595e",
+    "storage_bucket": "mehrabi-4595e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041675977587:android:8ff39d7ac0a1c8d955bb06",
+        "android_client_info": {
+          "package_name": "space.manus.wenausalli.t146334081328518"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCJReIldt-_Xr3ydRfKNq6dHJw2qN2d3a8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
