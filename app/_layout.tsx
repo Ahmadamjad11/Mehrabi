@@ -9,6 +9,7 @@ import { AppState, Platform } from "react-native";
 import "@/lib/_core/nativewind-pressable";
 import { ThemeProvider } from "@/lib/theme-provider";
 import AdsProvider from "@/components/ads/AdsProvider";
+import { initializeAnalyticsConsent } from "@/lib/analytics";
 import {
   SafeAreaFrameContext,
   SafeAreaInsetsContext,
@@ -33,6 +34,7 @@ export default function RootLayout() {
   // Initialize Manus runtime for cookie injection from parent container
   useEffect(() => {
     initManusRuntime();
+    void initializeAnalyticsConsent();
   }, []);
 
   useEffect(() => {
