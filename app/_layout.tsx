@@ -9,7 +9,7 @@ import { AppState, Platform } from "react-native";
 import "@/lib/_core/nativewind-pressable";
 import { ThemeProvider } from "@/lib/theme-provider";
 import AdsProvider from "@/components/ads/AdsProvider";
-import { initializeAnalyticsConsent } from "@/lib/analytics";
+import { initializeAnalytics, trackAnalyticsEvent } from "@/lib/analytics";
 import {
   SafeAreaFrameContext,
   SafeAreaInsetsContext,
@@ -34,14 +34,17 @@ export default function RootLayout() {
   // Initialize Manus runtime for cookie injection from parent container
   useEffect(() => {
     initManusRuntime();
-    void initializeAnalyticsConsent();
+    void initializeAnalytics();
   }, []);
 
   useEffect(() => {
     if (Platform.OS === "web") return;
     focusManager.setFocused(AppState.currentState === "active");
+    let previousState = AppState.currentState;
     const subscription = AppState.addEventListener("change", (state) => {
       focusManager.setFocused(state === "active");
+      if (state === "active" && previousState !== "active") trackAnalyticsEvent();
+      previousState = state;
     });
     return () => {
       subscription.remove();
