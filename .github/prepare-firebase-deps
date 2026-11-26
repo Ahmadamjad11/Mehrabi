@@ -1,1 +1,1 @@
-Retry Firebase dependency preparation after allowing pnpm root dependency installation.
+Retry Firebase dependency preparation using pnpm add directly; keep Expo dynamic config unchanged.
