@@ -14,13 +14,20 @@ const applyAnalyticsConsent = async (enabled: boolean) => {
   if (Platform.OS === "web") return;
 
   const analytics = getAnalytics();
-  await setConsent(analytics, {
+  const consent = {
     analytics_storage: enabled,
     ad_storage: false,
     ad_user_data: false,
     ad_personalization: false,
-  });
-  await setAnalyticsCollectionEnabled(analytics, enabled);
+  };
+
+  if (enabled) {
+    await setConsent(analytics, consent);
+    await setAnalyticsCollectionEnabled(analytics, true);
+  } else {
+    await setAnalyticsCollectionEnabled(analytics, false);
+    await setConsent(analytics, consent);
+  }
 };
 
 export async function initializeAnalyticsConsent() {
