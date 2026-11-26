@@ -6,7 +6,7 @@ export default function PrivacyScreen() {
   return <ScrollView contentContainerStyle={styles.content}>
     <Link href="/" style={styles.back}>رجوع</Link>
     <Text style={styles.title}>سياسة الخصوصية</Text>
-    <Text style={styles.date}>آخر تحديث: 7 نوفمبر 2026</Text>
+    <Text style={styles.date}>آخر تحديث: 26 نوفمبر 2026</Text>
     <Section title="ما البيانات التي نستخدمها؟">يستخدم محرابي موقعك فقط لعرض الأماكن القريبة وحساب اتجاه القبلة ومواقيت الصلاة. لا يتم حفظ إحداثيات موقعك في قاعدة البيانات.</Section>
     <Section title="الحساب والمساهمات">عند إنشاء حساب نحتفظ بالاسم والبريد الإلكتروني وبيانات الأماكن والتقييمات التي ترسلها. نستخدم ذلك لتأمين الحساب وإدارة المحتوى.</Section>
     <Section title="الإشعارات">تذكيرات الصلاة اختيارية ومحلية على جهازك. لا تُرسل إجاباتك أو تفضيلاتك إلى الخادم.</Section>
