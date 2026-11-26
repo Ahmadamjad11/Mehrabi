@@ -1,3 +1,4 @@
 Retry Firebase dependency preparation using pnpm add directly; keep Expo dynamic config unchanged.
 
 Retry: skip baseline Expo compatibility check and save Firebase dependencies.
+validate-expo-firebase-config
